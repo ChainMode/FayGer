@@ -1,0 +1,8 @@
+# 默认忽略一切
+/*
+
+# 仅放行以下条目
+!/docs/
+!/README.md
+!/LICENSE
+!/.gitignore

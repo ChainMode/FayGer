@@ -1,6 +1,0 @@
-// Schema definition for FayGer
-
-
-
-
-
