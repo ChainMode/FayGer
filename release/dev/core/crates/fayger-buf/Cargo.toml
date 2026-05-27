@@ -24,4 +24,10 @@ serde = { workspace = true }
 proptest = { workspace = true, optional = true }
 
 [dev-dependencies]
+# 集成测试同时需要 testing feature 提供的 strategies、ErrorCode 比对、以及手工
+# 拼装 BuF 字节流时用到的 binrw / serde derive。
+fayger-buf = { path = ".", features = ["testing"] }
+fayger-error = { path = "../fayger-error" }
 proptest = { workspace = true }
+binrw = { workspace = true }
+serde = { workspace = true }
