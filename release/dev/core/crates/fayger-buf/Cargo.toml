@@ -1,0 +1,27 @@
+[package]
+name = "fayger-buf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger BuF 制品格式、Parser 与 Serializer (M0 里程碑)"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# 暴露 proptest strategies，供下游 crate 与集成测试使用。
+testing = ["dep:proptest"]
+
+[dependencies]
+fayger-error = { path = "../fayger-error" }
+ciborium = { workspace = true }
+ciborium-io = { workspace = true }
+binrw = { workspace = true }
+serde = { workspace = true }
+proptest = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

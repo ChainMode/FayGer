@@ -1,0 +1,3 @@
+# Use rustfmt defaults for now.
+# 当出现风格争议时再细化。
+edition = "2021"
