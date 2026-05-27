@@ -145,6 +145,7 @@ dependencies = [
  "binrw",
  "ciborium",
  "ciborium-io",
+ "fayger-buf",
  "fayger-error",
  "proptest",
  "serde",
