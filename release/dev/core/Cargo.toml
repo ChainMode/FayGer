@@ -40,3 +40,6 @@ panic = "warn"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
+# doc_markdown 对中文文档中夹杂的 CamelCase / snake_case 标识符过度敏感，
+# 我们的设计文档与代码注释频繁混用中文与 Rust/CBOR 标识符，整工作区放行。
+doc_markdown = "allow"
