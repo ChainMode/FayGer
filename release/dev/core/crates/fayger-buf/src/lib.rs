@@ -9,6 +9,9 @@
 //! - [`mod@parser`] 模块：`parse(&[u8]) -> Result<BuFObject, _>`（任务 9 完成）
 //! - [`mod@serializer`] 模块：`serialize(&BuFObject) -> Result<Vec<u8>, _>`（任务 10 完成）
 //!
+//! 启用 `testing` feature 时还会暴露 [`mod@testing`]：proptest strategies，
+//! 供 PBT 测试与下游 crate 复用。
+//!
 //! 详见 `release/dev/core/MILESTONES/M0-buf-core/design.md` 中 `fayger-buf` crate 章节。
 
 #![doc(html_root_url = "https://docs.rs/fayger-buf/0.0.0")]
@@ -20,6 +23,9 @@ pub mod manifest;
 pub mod object;
 pub mod parser;
 pub mod serializer;
+
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use parser::parse;
 pub use serializer::serialize;
