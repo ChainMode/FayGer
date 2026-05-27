@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["crates/fayger-error", "crates/fayger-buf"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.83"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/jah-guo/fayger"
+description = "Fayger 第一阶段开发实现 - 多平台 Fay 虚拟运行环境"
+
+[workspace.dependencies]
+# CBOR：用于 Manifest 与 Section_Index 的序列化。canonical 层在 fayger-buf 内自实现。
+ciborium = "0.2.2"
+ciborium-io = "0.2.2"
+
+# 二进制布局：用于 Header 与 Trailer 的字节布局派生。
+binrw = "0.14.1"
+
+# Serde：派生 Manifest / SectionDescriptor 等结构。
+serde = { version = "1.0", features = ["derive"] }
+
+# Property-based testing。反例归档由 proptest 自身写入 `proptest-regressions/` 目录。
+proptest = "1.5.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+# pedantic 中过于挑剔且与项目风格冲突的项，按需放行：
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"

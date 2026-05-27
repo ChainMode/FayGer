@@ -4,6 +4,7 @@
 # 仅放行以下条目
 !/docs/
 !/release/
+!/.github/
 !/README.md
 !/LICENSE
 !/.gitignore

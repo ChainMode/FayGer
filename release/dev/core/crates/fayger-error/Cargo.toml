@@ -1,0 +1,13 @@
+[package]
+name = "fayger-error"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger 统一错误模型 (蓝图 §6.1)"
+
+[lints]
+workspace = true
+
+[dependencies]
