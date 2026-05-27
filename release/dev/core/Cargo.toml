@@ -43,3 +43,7 @@ missing_errors_doc = "allow"
 # doc_markdown 对中文文档中夹杂的 CamelCase / snake_case 标识符过度敏感，
 # 我们的设计文档与代码注释频繁混用中文与 Rust/CBOR 标识符，整工作区放行。
 doc_markdown = "allow"
+# `pub(crate)` 在私有模块里被 redundant_pub_crate 警告，但同时 `pub` 又会
+# 触发 rustc 的 unreachable_pub。两者冲突，统一放行 redundant_pub_crate，
+# 优先保留 `pub(crate)` 的可读性（明确告诉读者「这是 crate 内部 API」）。
+redundant_pub_crate = "allow"
