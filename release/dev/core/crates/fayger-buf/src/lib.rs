@@ -4,8 +4,8 @@
 //!
 //! - [`mod@format`] 模块：`Header` 与 `Trailer` 的固定字节布局（任务 3 完成）
 //! - [`mod@canonical`] 模块：canonical CBOR 编解码层（任务 4 完成）
-//! - [`mod@manifest`] 模块：`BuFManifest` 与子类型（任务 6 完成）
-//! - `object` 模块：`BuFObject` 与一致性自检（任务 8）
+//! - [`mod@manifest`] 模块：`BuFManifest` 与子类型（任务 6/7 完成）
+//! - [`mod@object`] 模块：`BuFObject` 与一致性自检（任务 8 完成）
 //! - `parser`、`serializer` 模块：顶层 API（任务 9-10）
 //!
 //! 详见 `release/dev/core/MILESTONES/M0-buf-core/design.md` 中 `fayger-buf` crate 章节。
@@ -16,3 +16,4 @@ pub mod canonical;
 mod error;
 pub mod format;
 pub mod manifest;
+pub mod object;
