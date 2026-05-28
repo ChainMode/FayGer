@@ -9,7 +9,7 @@
 //! 已有现成值则原样保留（保证 round-trip 字节级一致）。
 
 use crate::canonical::canonical_encode;
-use crate::format::{Header, Trailer, FORMAT_VERSION_M0, HEADER_SIZE, TRAILER_SIZE};
+use crate::format::{Header, Trailer, HEADER_SIZE, TRAILER_SIZE};
 use crate::object::BuFObject;
 use crate::parser::SectionIndexEntry;
 use binrw::BinWrite;
@@ -103,14 +103,11 @@ pub fn serialize(obj: &BuFObject) -> Result<Vec<u8>, FaygerError> {
     // 5. 构造最终 Header / Trailer。
     //
     // raw_header 中除 format_version 之外的字段都被偏移/长度计算覆盖。
-    // 我们尊重 raw_header 中的 format_version（允许将来支持多版本写出），
-    // 但目前 M0 强制写 FORMAT_VERSION_M0，以避免 raw_header 被外部篡改后影响产出。
+    // format_version 原样保留——这保证 parse → serialize 的字节级强往返。
+    // 通过 Builder API 等其它构造路径如需默认值，可在那一层显式填充
+    // FORMAT_VERSION_M0 后再调 serialize。
     let header = Header {
-        format_version: if obj.raw_header.format_version == 0 {
-            FORMAT_VERSION_M0
-        } else {
-            obj.raw_header.format_version
-        },
+        format_version: obj.raw_header.format_version,
         manifest_offset,
         manifest_length,
         section_index_offset,
@@ -328,21 +325,33 @@ mod tests {
     }
 
     #[test]
-    fn serializer_sets_format_version_when_raw_is_zero() {
-        let mut obj = sample_object();
-        obj.raw_header.format_version = 0; // 表示「未指定」
-        let bytes = serialize(&obj).expect("serialize");
-        let parsed = parse(&bytes).expect("parse");
-        assert_eq!(parsed.raw_header.format_version, FORMAT_VERSION_M0);
-    }
+    fn serializer_writes_raw_format_version_verbatim() {
+        // M0 阶段 serializer 不"修正" raw_header.format_version：
+        // 调用方负责在构造 BuFObject 时显式填入合理的版本号
+        // （Builder API 等上层应默认填 FORMAT_VERSION_M0）。
+        // 该语义保证 parse → serialize 字节级强往返成立——见 tests/round_trip.rs
+        // 的 Property 2 与 tests/corruption.rs 的 bit_flip_changes_round_trip。
 
-    #[test]
-    fn serializer_preserves_nonzero_raw_format_version() {
-        let mut obj = sample_object();
-        obj.raw_header.format_version = 7; // 故意写一个非默认值
-        let bytes = serialize(&obj).expect("serialize");
-        let parsed = parse(&bytes).expect("parse");
-        assert_eq!(parsed.raw_header.format_version, 7);
+        // raw=0 原样写出 0
+        let mut obj_zero = sample_object();
+        obj_zero.raw_header.format_version = 0;
+        let bytes_zero = serialize(&obj_zero).expect("serialize");
+        let parsed_zero = parse(&bytes_zero).expect("parse");
+        assert_eq!(parsed_zero.raw_header.format_version, 0);
+
+        // raw=非零 原样写出
+        let mut obj_seven = sample_object();
+        obj_seven.raw_header.format_version = 7;
+        let bytes_seven = serialize(&obj_seven).expect("serialize");
+        let parsed_seven = parse(&bytes_seven).expect("parse");
+        assert_eq!(parsed_seven.raw_header.format_version, 7);
+
+        // raw=FORMAT_VERSION_M0 原样写出
+        let mut obj_m0 = sample_object();
+        obj_m0.raw_header.format_version = FORMAT_VERSION_M0;
+        let bytes_m0 = serialize(&obj_m0).expect("serialize");
+        let parsed_m0 = parse(&bytes_m0).expect("parse");
+        assert_eq!(parsed_m0.raw_header.format_version, FORMAT_VERSION_M0);
     }
 
     #[test]
