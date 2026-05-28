@@ -7,11 +7,29 @@
 
 #![allow(missing_docs, clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use fayger_buf::{format::HEADER_SIZE, parse, serialize, testing::arb_buf_object};
+use fayger_buf::{
+    format::{HEADER_SIZE, TRAILER_SIZE},
+    parse, serialize,
+    testing::arb_buf_object,
+};
 use proptest::prelude::*;
 
 fn build(obj: &fayger_buf::object::BuFObject) -> Vec<u8> {
     serialize(obj).expect("serialize ok")
+}
+
+/// Trailer 占位区域（manifest_digest + crc32）：M0 阶段不参与校验。
+///
+/// 字节流尾部 `TRAILER_SIZE` = 44 字节中：
+/// - 前 8 字节是 `total_length`（参与校验）
+/// - 之后 32 字节是 `manifest_digest`（M0 占位）
+/// - 之后 4 字节是 `crc32`（M0 占位）
+///
+/// 返回 true 表示 `pos` 落在 [trailer_start + 8, total_len) 区间。
+const fn is_in_trailer_placeholder(pos: usize, total_len: usize) -> bool {
+    let trailer_start = total_len.saturating_sub(TRAILER_SIZE);
+    let placeholder_start = trailer_start + 8;
+    pos >= placeholder_start && pos < total_len
 }
 
 proptest! {
@@ -25,10 +43,14 @@ proptest! {
 
     /// 单字节翻转：对合法 BuF 在某个随机位置翻转一位，parse 应失败。
     ///
-    /// 这并不是绝对成立——比如翻转 Trailer 中 manifest_digest 占位字节
-    /// 在 M0 阶段不会被检测；翻转某些 Manifest extensions 中的 Value 在某些情况下
-    /// 可能仍解析为合法（但语义改变）的 CBOR。所以我们只要求**破坏后字节流的解析
-    /// 与原始解析不再字节级一致**——这是一个稍弱但仍有意义的检测断言。
+    /// 这并不是绝对成立——
+    ///
+    /// - Trailer 中的 `manifest_digest` 与 `crc32` 在 M0 阶段是占位字段，
+    ///   设计文档明确不参与校验；翻转其中字节不会被检测，是预期行为。
+    ///   这里通过 [`is_in_trailer_placeholder`] 跳过这一区域。
+    /// - Manifest extensions 中某些 ciborium::Value 字节翻转后仍解析为合法
+    ///   （但语义改变）的 CBOR；此时我们退化为「破坏后字节流的解析与原始解析
+    ///   不再字节级一致」这一较弱的检测断言。
     #[test]
     fn bit_flip_changes_round_trip(
         obj in arb_buf_object(),
@@ -40,6 +62,11 @@ proptest! {
             return Ok(());
         }
         let pos = position % bytes.len();
+        // 跳过 M0 不校验的 trailer 占位区域
+        if is_in_trailer_placeholder(pos, bytes.len()) {
+            return Ok(());
+        }
+
         let mut corrupted = bytes.clone();
         corrupted[pos] ^= 1u8 << bit;
 
@@ -50,7 +77,11 @@ proptest! {
             }
             Ok(reparsed) => {
                 let resb = serialize(&reparsed).expect("re-serialize");
-                prop_assert!(resb != bytes, "single-bit corruption was not detected");
+                prop_assert!(
+                    resb != bytes,
+                    "single-bit corruption at pos={pos} bit={bit} (bytes.len()={}) was not detected",
+                    bytes.len()
+                );
             }
         }
     }

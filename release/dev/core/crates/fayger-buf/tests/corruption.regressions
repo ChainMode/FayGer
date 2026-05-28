@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cecf6bd2a0b4474f028d949cd3f6e6b5f09a725bb938ebd80dac3ba015062c50 # shrinks to obj = BuFObject { manifest: BuFManifest { schema_version: SemVer { major: 0, minor: 10, patch: 100, pre: None }, runtime_interface_min: SemVer { major: 10, minor: 100, patch: 100, pre: Some("a") }, deprecation_notice: None, entry: EntryPoint("main"), runtime: None, capabilities: {}, quotas: None, sections: [], signature: None, extensions: {} }, sections: [], raw_header: Header { format_version: 1, manifest_offset: 40, manifest_length: 0, section_index_offset: 40, section_index_length: 0 }, raw_trailer: Trailer { total_length: 0, manifest_digest: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], crc32: 0 } }, position = 10959327567306175650, bit = 0
