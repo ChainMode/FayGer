@@ -112,7 +112,7 @@
   - 在 `tests/fixtures.rs` 写两个测试：`parse(minimal.buf) == 预期 BuFObject`；`serialize(预期 BuFObject) == minimal.buf`（字节级等价）；同样为 two_sections 写一对。
   - _Requirements: 7.2_
 
-- [ ] 17. CI workflow 完整化与文档
+- [x] 17. CI workflow 完整化与文档
   - 完善 `.github/workflows/ci.yml`：fmt + clippy + test + doc，覆盖 ubuntu / macos / windows 三平台。
   - 在 `release/dev/core/README.md` 写"如何本地运行测试 / 运行 PBT / 查看反例归档"。
   - _Requirements: 7.3, 7.4_
