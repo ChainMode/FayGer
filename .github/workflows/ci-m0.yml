@@ -72,9 +72,16 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ${{ env.WORKSPACE_DIR }}
-      - name: Test
+      - name: Test (debug)
         working-directory: ${{ env.WORKSPACE_DIR }}
         run: cargo test --workspace --all-features
+      # release 模式跑一遍 PBT，触发同一批 proptest cases 但走优化构建。
+      # 单跑 ubuntu 一台机器即可——release 跑 PBT 主要为发现"在优化下才暴露的反例"
+      # （比如 inlining 后的算术 / SIMD 行为差异），三平台没必要重复。
+      - name: PBT smoke (release, ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: ${{ env.WORKSPACE_DIR }}
+        run: cargo test --workspace --all-features --release --tests
 
   doc:
     name: cargo doc
@@ -91,4 +98,4 @@ jobs:
           workspaces: ${{ env.WORKSPACE_DIR }}
       - name: Doc
         working-directory: ${{ env.WORKSPACE_DIR }}
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --all-features --no-deps
