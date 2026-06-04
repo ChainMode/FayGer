@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fayger-error", "crates/fayger-buf"]
+members = ["crates/fayger-error", "crates/fayger-buf", "crates/fayger-loader", "crates/fayger-runtime", "crates/fayger-adapter", "crates/fayger-observability", "crates/fayger-cli", "crates/fayger-bridge"]
 
 [workspace.package]
 version = "0.0.0"
@@ -23,6 +23,13 @@ serde = { version = "1.0", features = ["derive"] }
 
 # Property-based testing。反例归档由 proptest 自身写入 `proptest-regressions/` 目录。
 proptest = "1.5.0"
+
+# 摘要与校验和（M1 加载链 Verify(Digest)）。纯 Rust、活跃维护。
+sha2 = "0.10"
+crc32fast = "1.4"
+
+# ed25519 签名（M4 加载链 Verify(Signature)）。纯 Rust、活跃维护。
+ed25519-dalek = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

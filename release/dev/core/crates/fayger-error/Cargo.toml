@@ -11,3 +11,6 @@ description = "Fayger 统一错误模型 (蓝图 §6.1)"
 workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }

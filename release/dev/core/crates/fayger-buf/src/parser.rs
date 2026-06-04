@@ -184,6 +184,164 @@ pub fn parse(bytes: &[u8]) -> Result<BuFObject, FaygerError> {
     })
 }
 
+/// 仅从"骨架字节"解析 [`BuFObject`]，不读取 Section 段体、不校验 crc32 与 section digest。
+///
+/// 供 Lazy 加载（M5）使用：调用方先从 BuF_Source 读取 `skeleton`（`[0, sections_region_offset)`，
+/// 即 Header + Manifest + Section_Index）与末 [`TRAILER_SIZE`] 字节 `trailer`，并提供制品总长度
+/// `total_len`。本函数完成结构性校验（magic、offset 边界、Manifest CBOR 与必填字段、
+/// Section_Index 与 manifest.sections 一致），但：
+///
+/// - 返回的 [`BuFObject::sections`] 为空（Lazy 模式按需填充）；
+/// - 不校验 crc32（覆盖 Section 段体，Lazy 未读全）；
+/// - 不校验任何 Section 段体 digest（推迟到首次访问）；
+/// - manifest_digest 的校验由调用方（加载层）基于 `skeleton` 完成。
+///
+/// `skeleton` 的长度必须恰好等于 `sections_region_offset`（由 Header 推导）。
+///
+/// # Errors
+/// 结构不合法（magic / offset / CBOR / 必填 / Section_Index 不一致 / 长度自洽性）时返回
+/// `LDR_PARSE_FAIL`。
+pub fn parse_skeleton(
+    skeleton: &[u8],
+    trailer: &[u8],
+    total_len: u64,
+) -> Result<BuFObject, FaygerError> {
+    // Header：骨架前 HEADER_SIZE 字节。
+    if skeleton.len() < HEADER_SIZE {
+        return Err(parse_fail("skeleton shorter than header")
+            .with_context("reason", ContextValue::string("Truncated")));
+    }
+    if skeleton[..4] != BUF_MAGIC {
+        return Err(parse_fail("magic does not match BUF\\0")
+            .with_context("reason", ContextValue::string("MagicMismatch"))
+            .with_context("magic", ContextValue::Bytes(skeleton[..4].to_vec())));
+    }
+    let header = read_header(skeleton)?;
+
+    // sections_region_offset = section_index_offset + section_index_length。
+    let sections_region_offset = header
+        .section_index_offset
+        .checked_add(header.section_index_length)
+        .ok_or_else(|| {
+            out_of_bounds(
+                "section_index_offset+section_index_length",
+                header.section_index_offset,
+                header.section_index_length,
+            )
+        })?;
+
+    // 骨架长度必须恰好等于 sections_region_offset。
+    if u64::try_from(skeleton.len()).unwrap_or(u64::MAX) != sections_region_offset {
+        return Err(parse_fail("skeleton length does not match header layout")
+            .with_context("reason", ContextValue::string("OffsetOutOfBounds"))
+            .with_context(
+                "sections_region_offset",
+                ContextValue::U64(sections_region_offset),
+            )
+            .with_context(
+                "skeleton_length",
+                ContextValue::U64(u64::try_from(skeleton.len()).unwrap_or(u64::MAX)),
+            ));
+    }
+
+    // Manifest 与 Section_Index 偏移必须落在骨架内（[HEADER_SIZE, sections_region_offset]）。
+    check_skeleton_segment(
+        "manifest",
+        header.manifest_offset,
+        header.manifest_length,
+        sections_region_offset,
+    )?;
+    check_skeleton_segment(
+        "section_index",
+        header.section_index_offset,
+        header.section_index_length,
+        sections_region_offset,
+    )?;
+
+    let manifest_bytes = slice_segment(skeleton, header.manifest_offset, header.manifest_length)?;
+    let manifest: BuFManifest = canonical_decode(manifest_bytes).map_err(|e| {
+        cbor_decode_fail("manifest CBOR decode failed")
+            .with_context("reason", manifest_failure_reason(&e))
+            .with_context("detail", ContextValue::string(format!("{e}")))
+    })?;
+
+    let index_bytes = slice_segment(
+        skeleton,
+        header.section_index_offset,
+        header.section_index_length,
+    )?;
+    let section_index: Vec<SectionIndexEntry> = canonical_decode(index_bytes).map_err(|e| {
+        cbor_decode_fail("section index CBOR decode failed")
+            .with_context("reason", ContextValue::string("SectionIndexInvalid"))
+            .with_context("detail", ContextValue::string(format!("{e}")))
+    })?;
+
+    cross_check_index_and_manifest(&section_index, &manifest)?;
+
+    // Trailer：从给定的末段字节解析（offset 0，因为调用方已切出末 TRAILER_SIZE 字节）。
+    if trailer.len() != TRAILER_SIZE {
+        return Err(parse_fail("trailer slice has wrong size")
+            .with_context("reason", ContextValue::string("Truncated"))
+            .with_context(
+                "expected",
+                ContextValue::U64(u64::try_from(TRAILER_SIZE).unwrap_or(u64::MAX)),
+            )
+            .with_context(
+                "actual",
+                ContextValue::U64(u64::try_from(trailer.len()).unwrap_or(u64::MAX)),
+            ));
+    }
+    let trailer_obj = read_trailer(trailer, 0)?;
+
+    // total_length 自洽：Trailer 声明的总长应等于调用方提供的 total_len，
+    // 且 total_len 至少容纳 sections_region_offset + TRAILER_SIZE。
+    let min_total = sections_region_offset
+        .checked_add(u64::try_from(TRAILER_SIZE).unwrap_or(u64::MAX))
+        .ok_or_else(|| parse_fail("total length overflow"))?;
+    if total_len < min_total {
+        return Err(parse_fail("total length too small for skeleton + trailer")
+            .with_context("reason", ContextValue::string("Truncated"))
+            .with_context("total_len", ContextValue::U64(total_len))
+            .with_context("min_total", ContextValue::U64(min_total)));
+    }
+    if trailer_obj.total_length != total_len {
+        return Err(
+            parse_fail("trailer total_length disagrees with provided total length")
+                .with_context("reason", ContextValue::string("TrailerLengthMismatch"))
+                .with_context(
+                    "trailer_total_length",
+                    ContextValue::U64(trailer_obj.total_length),
+                )
+                .with_context("total_len", ContextValue::U64(total_len)),
+        );
+    }
+
+    Ok(BuFObject {
+        manifest,
+        sections: Vec::new(), // Lazy：按需填充
+        raw_header: header,
+        raw_trailer: trailer_obj,
+    })
+}
+
+/// 检查 (offset, length) 落在 [HEADER_SIZE, region_end] 内（骨架版边界检查）。
+fn check_skeleton_segment(
+    field: &str,
+    offset: u64,
+    length: u64,
+    region_end: u64,
+) -> Result<(), FaygerError> {
+    let header_end = u64::try_from(HEADER_SIZE).unwrap_or(u64::MAX);
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| out_of_bounds(field, offset, length))?;
+    if offset < header_end || end > region_end {
+        return Err(out_of_bounds(field, offset, length)
+            .with_context("region_end", ContextValue::U64(region_end)));
+    }
+    Ok(())
+}
+
 /// 构造 LDR_PARSE_FAIL 错误。
 fn parse_fail(message: impl Into<String>) -> FaygerError {
     FaygerError::new(
@@ -760,5 +918,56 @@ mod tests {
         let obj = parse(&bytes).expect("parse ok");
         assert_eq!(obj.sections[0].payload, payload);
         assert_eq!(payloads[0], payload);
+    }
+
+    // ----- parse_skeleton (M5) -----
+
+    #[test]
+    fn parse_skeleton_yields_full_manifest_and_empty_sections() {
+        let (bytes, manifest, _payloads) = sample_two_sections();
+        // 完整 parse 得到 sections_region_offset。
+        let full = parse(&bytes).expect("parse");
+        let sro = full.raw_header.sections_offset().expect("sro") as usize;
+        let skeleton = &bytes[..sro];
+        let trailer = &bytes[bytes.len() - super::TRAILER_SIZE..];
+        let total = bytes.len() as u64;
+
+        let obj = parse_skeleton(skeleton, trailer, total).expect("parse_skeleton");
+        // manifest 与完整解析一致
+        assert_eq!(obj.manifest, manifest);
+        // sections 为空（Lazy 按需填充）
+        assert!(obj.sections.is_empty());
+        // header/trailer 与完整解析一致
+        assert_eq!(obj.raw_header, full.raw_header);
+        assert_eq!(obj.raw_trailer, full.raw_trailer);
+    }
+
+    #[test]
+    fn parse_skeleton_rejects_wrong_skeleton_length() {
+        let (bytes, _m, _p) = sample_two_sections();
+        let full = parse(&bytes).expect("parse");
+        let sro = full.raw_header.sections_offset().expect("sro") as usize;
+        let trailer = &bytes[bytes.len() - super::TRAILER_SIZE..];
+        // 故意多给一个字节（骨架长度 != sections_region_offset）
+        let bad_skeleton = &bytes[..=sro];
+        let err =
+            parse_skeleton(bad_skeleton, trailer, bytes.len() as u64).expect_err("should fail");
+        assert_eq!(err.code, fayger_error::ErrorCode::LdrParseFail);
+    }
+
+    #[test]
+    fn parse_skeleton_rejects_total_length_mismatch() {
+        let (bytes, _m, _p) = sample_two_sections();
+        let full = parse(&bytes).expect("parse");
+        let sro = full.raw_header.sections_offset().expect("sro") as usize;
+        let skeleton = &bytes[..sro];
+        let trailer = &bytes[bytes.len() - super::TRAILER_SIZE..];
+        // 提供错误的 total_len（与 trailer.total_length 不符）
+        let err =
+            parse_skeleton(skeleton, trailer, bytes.len() as u64 + 100).expect_err("should fail");
+        assert!(matches!(
+            err.context.get("reason"),
+            Some(ContextValue::String(s)) if s == "TrailerLengthMismatch"
+        ));
     }
 }

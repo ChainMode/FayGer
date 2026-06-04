@@ -1,0 +1,22 @@
+[package]
+name = "fayger-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger 运行层骨架：Runtime_Interface、生命周期与 Mock Adapter (M2 里程碑)"
+
+[lints]
+workspace = true
+
+[dependencies]
+fayger-buf = { path = "../fayger-buf" }
+fayger-error = { path = "../fayger-error" }
+fayger-observability = { path = "../fayger-observability" }
+
+[dev-dependencies]
+# 端到端测试用 fayger-loader 构造经封装的 BuF 输入；testing feature 提供 proptest 生成器。
+fayger-buf = { path = "../fayger-buf", features = ["testing"] }
+fayger-loader = { path = "../fayger-loader" }
+proptest = { workspace = true }

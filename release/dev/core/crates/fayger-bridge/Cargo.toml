@@ -1,0 +1,21 @@
+[package]
+name = "fayger-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger 运行层↔适配层统一桥接集成 (M10 里程碑)"
+
+[lints]
+workspace = true
+
+[dependencies]
+fayger-buf = { path = "../fayger-buf" }
+fayger-error = { path = "../fayger-error" }
+fayger-runtime = { path = "../fayger-runtime" }
+fayger-adapter = { path = "../fayger-adapter" }
+
+[dev-dependencies]
+fayger-loader = { path = "../fayger-loader" }
+proptest = { workspace = true }

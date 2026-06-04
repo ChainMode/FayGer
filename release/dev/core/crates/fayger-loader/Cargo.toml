@@ -1,0 +1,23 @@
+[package]
+name = "fayger-loader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger 加载链：Verify(Digest) 与 Negotiate(Version) (M1 里程碑)"
+
+[lints]
+workspace = true
+
+[dependencies]
+fayger-buf = { path = "../fayger-buf" }
+fayger-error = { path = "../fayger-error" }
+sha2 = { workspace = true }
+crc32fast = { workspace = true }
+ed25519-dalek = { workspace = true }
+
+[dev-dependencies]
+# 集成测试需要 fayger-buf 的 proptest strategies，以及手工拼装 BuF 时的 fayger-buf 类型。
+fayger-buf = { path = "../fayger-buf", features = ["testing"] }
+proptest = { workspace = true }

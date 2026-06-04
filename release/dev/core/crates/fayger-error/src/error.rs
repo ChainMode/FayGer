@@ -75,6 +75,52 @@ impl FaygerError {
         self.cause = Some(Box::new(cause));
         self
     }
+
+    /// 逐层包装（蓝图 §6.2）：用上层语义包装一个下层错误。
+    ///
+    /// 等价于 `FaygerError::new(code, source_layer, message).with_cause(cause)`，但语义上明确
+    /// 表达"上层包装下层"的意图。**不**改写被包装错误（`cause`）的任何字段
+    /// （`code` / `source_layer` / `context` / `message`），保证因果链信息不丢失。
+    #[must_use]
+    pub fn wrap(
+        code: ErrorCode,
+        source_layer: Layer,
+        message: impl Into<String>,
+        cause: Self,
+    ) -> Self {
+        Self::new(code, source_layer, message).with_cause(cause)
+    }
+
+    /// 自外向内遍历整条因果链：`self` 在前，随后逐层沿 `cause` 深入。
+    ///
+    /// 产出的第一个元素是最外层（`self`），最后一个是最内层根因（[`root_cause`](Self::root_cause)）。
+    pub fn chain(&self) -> impl Iterator<Item = &Self> {
+        std::iter::successors(Some(self), |e| e.cause.as_deref())
+    }
+
+    /// 沿 [`chain`](Self::chain) 的 `source_layer` 序列（由外到内）。
+    ///
+    /// 例如三层链 `Runtime → Adapter → Host` 返回 `[Runtime, Adapter, Host]`（蓝图 §6.3）。
+    #[must_use]
+    pub fn layer_chain(&self) -> Vec<Layer> {
+        self.chain().map(|e| e.source_layer).collect()
+    }
+
+    /// 因果链最内层的根因错误（链尾）。无 `cause` 时即 `self`。
+    #[must_use]
+    pub fn root_cause(&self) -> &Self {
+        let mut cur = self;
+        while let Some(next) = cur.cause.as_deref() {
+            cur = next;
+        }
+        cur
+    }
+
+    /// 因果链长度（至少为 1，即 `self` 自身）。
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.chain().count()
+    }
 }
 
 impl fmt::Display for FaygerError {
@@ -184,5 +230,65 @@ mod tests {
         // 后写入的覆盖
         let cause = err.cause.as_deref().expect("cause set");
         assert_eq!(cause.message, "second");
+    }
+
+    #[test]
+    fn wrap_places_cause_without_rewriting_lower() {
+        let low = FaygerError::new(ErrorCode::AdpHostCallFailed, Layer::Host, "syscall")
+            .with_context("errno", ContextValue::U64(13));
+        let top = FaygerError::wrap(
+            ErrorCode::RtInstanceFailed,
+            Layer::Runtime,
+            "runtime wrap",
+            low,
+        );
+        // 上层字段
+        assert_eq!(top.code, ErrorCode::RtInstanceFailed);
+        assert_eq!(top.source_layer, Layer::Runtime);
+        // 下层未被改写
+        let cause = top.cause.as_deref().expect("has cause");
+        assert_eq!(cause.code, ErrorCode::AdpHostCallFailed);
+        assert_eq!(cause.source_layer, Layer::Host);
+        assert!(matches!(cause.context["errno"], ContextValue::U64(13)));
+        assert_eq!(cause.message, "syscall");
+    }
+
+    #[test]
+    fn chain_layer_chain_root_cause_depth_on_multi_layer() {
+        let bottom = FaygerError::new(ErrorCode::AdpHostCallFailed, Layer::Host, "host");
+        let mid = FaygerError::wrap(
+            ErrorCode::AdpHostCallFailed,
+            Layer::Adapter,
+            "adapter",
+            bottom,
+        );
+        let top = FaygerError::wrap(ErrorCode::RtInstanceFailed, Layer::Runtime, "runtime", mid);
+
+        assert_eq!(top.depth(), 3);
+        assert_eq!(
+            top.layer_chain(),
+            [Layer::Runtime, Layer::Adapter, Layer::Host]
+        );
+        // chain 自外向内
+        let codes: Vec<_> = top.chain().map(|e| e.code).collect();
+        assert_eq!(
+            codes,
+            [
+                ErrorCode::RtInstanceFailed,
+                ErrorCode::AdpHostCallFailed,
+                ErrorCode::AdpHostCallFailed
+            ]
+        );
+        assert_eq!(top.root_cause().source_layer, Layer::Host);
+        assert_eq!(top.root_cause().message, "host");
+    }
+
+    #[test]
+    fn single_error_has_depth_one_and_self_root() {
+        let err = FaygerError::new(ErrorCode::LdrParseFail, Layer::Loader, "solo");
+        assert_eq!(err.depth(), 1);
+        assert_eq!(err.layer_chain(), [Layer::Loader]);
+        assert_eq!(err.root_cause().message, "solo");
+        assert_eq!(err.chain().count(), 1);
     }
 }

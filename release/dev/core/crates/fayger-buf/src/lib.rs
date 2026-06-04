@@ -28,4 +28,5 @@ pub mod serializer;
 pub mod testing;
 
 pub use parser::parse;
+pub use parser::parse_skeleton;
 pub use serializer::serialize;

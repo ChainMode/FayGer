@@ -1,0 +1,97 @@
+name: Release - fayger CLI
+
+# 仅在打 v* tag 时触发，与日常 CI（ci-m0.yml）解耦。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  WORKSPACE_DIR: release/dev/core
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.WORKSPACE_DIR }}
+
+      - name: Build fayger (release)
+        working-directory: ${{ env.WORKSPACE_DIR }}
+        run: cargo build --release -p fayger-cli --bin fayger --target ${{ matrix.target }}
+
+      - name: Stage artifact + checksum (Unix)
+        if: matrix.os != 'windows-latest'
+        working-directory: ${{ env.WORKSPACE_DIR }}
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/fayger${{ matrix.ext }}"
+          OUT="fayger-${{ matrix.target }}${{ matrix.ext }}"
+          cp "$BIN" "$OUT"
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$OUT" > "$OUT.sha256"
+          else
+            sha256sum "$OUT" > "$OUT.sha256"
+          fi
+          ./"$OUT" version
+
+      - name: Stage artifact + checksum (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: ${{ env.WORKSPACE_DIR }}
+        shell: pwsh
+        run: |
+          $bin = "target/${{ matrix.target }}/release/fayger${{ matrix.ext }}"
+          $out = "fayger-${{ matrix.target }}${{ matrix.ext }}"
+          Copy-Item $bin $out
+          (Get-FileHash $out -Algorithm SHA256).Hash.ToLower() + "  " + $out | Out-File -Encoding ascii "$out.sha256"
+          & ".\$out" version
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fayger-${{ matrix.target }}
+          path: |
+            ${{ env.WORKSPACE_DIR }}/fayger-${{ matrix.target }}${{ matrix.ext }}
+            ${{ env.WORKSPACE_DIR }}/fayger-${{ matrix.target }}${{ matrix.ext }}.sha256
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Attach binaries + checksums to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          fail_on_unmatched_files: true

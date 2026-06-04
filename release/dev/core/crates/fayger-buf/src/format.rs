@@ -63,6 +63,36 @@ pub struct Header {
     pub section_index_length: u64,
 }
 
+impl Header {
+    /// Manifest 摘要覆盖区间的终点，等于 Sections 段的起始偏移。
+    ///
+    /// 定义为 `section_index_offset + section_index_length`。加载链的
+    /// Verify(Digest) 阶段用它界定 `manifest_digest` 覆盖的字节区间
+    /// `[0, sections_offset)`（即 Header || Manifest || Section_Index）。
+    ///
+    /// 返回 `None` 表示两字段相加溢出 `u64`（异常输入）。本方法与 digest
+    /// 计算无关，不引入任何摘要依赖，保持 M0 的格式层职责纯净。
+    #[must_use]
+    pub const fn sections_offset(&self) -> Option<u64> {
+        self.section_index_offset
+            .checked_add(self.section_index_length)
+    }
+
+    /// 从字节前缀解析 Header（小端、校验 magic）。
+    ///
+    /// 仅读取前 [`HEADER_SIZE`] 字节；要求 `bytes.len() >= HEADER_SIZE`。供 Lazy 加载
+    /// （M5）在不引入 binrw 直接依赖的情况下从下游 crate 解析 Header。
+    ///
+    /// # Errors
+    /// 字节不足或 magic 不匹配等情况返回 [`binrw::Error`]。
+    pub fn read_from_prefix(bytes: &[u8]) -> Result<Self, binrw::Error> {
+        use binrw::BinRead;
+        let end = HEADER_SIZE.min(bytes.len());
+        let mut cursor = binrw::io::Cursor::new(&bytes[..end]);
+        Self::read(&mut cursor)
+    }
+}
+
 /// BuF 文件尾部 44 字节的固定结构。
 ///
 /// M0 阶段 `manifest_digest` 与 `crc32` 仅占位（写零、不校验）。
@@ -248,5 +278,25 @@ mod tests {
         // total_length(8) + manifest_digest(32) + crc32(4) = 44
         const EXPECTED: usize = 8 + 32 + 4;
         assert_eq!(TRAILER_SIZE, EXPECTED);
+    }
+
+    #[test]
+    fn sections_offset_sums_index_offset_and_length() {
+        let h = sample_header();
+        // sample_header: section_index_offset = HEADER_SIZE + 100 = 140,
+        // section_index_length = 50 ⟹ sections_offset = 190
+        assert_eq!(h.sections_offset(), Some(190));
+    }
+
+    #[test]
+    fn sections_offset_detects_overflow() {
+        let h = Header {
+            format_version: FORMAT_VERSION_M0,
+            manifest_offset: 0,
+            manifest_length: 0,
+            section_index_offset: u64::MAX,
+            section_index_length: 1,
+        };
+        assert_eq!(h.sections_offset(), None);
     }
 }

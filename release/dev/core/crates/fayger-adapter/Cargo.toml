@@ -1,0 +1,17 @@
+[package]
+name = "fayger-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger 适配层：Universal_Instruction 指令集、Platform_Adapter 与能力裁剪 (M3 里程碑)"
+
+[lints]
+workspace = true
+
+[dependencies]
+fayger-error = { path = "../fayger-error" }
+
+[dev-dependencies]
+proptest = { workspace = true }
