@@ -9,6 +9,11 @@ use fayger_bridge::{run_bridged, BridgeReport, InstructionMapping};
 use fayger_buf::manifest::types::{Digest, ProfileConstraints, SectionKind, SectionVisibility};
 use fayger_buf::manifest::{BuFManifest, EntryPoint, SectionDescriptor, SemVer};
 use fayger_buf::object::{BuFObject, Section};
+use fayger_cap::{
+    evaluate_command, AuthorizationEvidence, Decision, DriverManifest, EvaluationRequest,
+};
+use fayger_error::{ContextValue, ErrorCode, FaygerError, Layer};
+use fayger_faymanifest::{assemble_str, FayManifest, StubRegistry};
 use fayger_loader::{load, seal, LoadPolicy};
 use fayger_observability::{EventCategory, EventFilter, FaygerEvent};
 use fayger_runtime::{LifecycleState, MockAdapter, Runtime, RuntimeInterface};
@@ -302,6 +307,137 @@ pub fn render_bridge_report(report: &BridgeReport) -> String {
     s
 }
 
+/// 解析并装配一个 FayManifest JSON 文本，返回装配报告文本（纯，不触达 FS）。
+///
+/// 使用 H1 占位注册表 [`StubRegistry`]（真实注册表后端见 H2）；依赖将被标注为
+/// `stubbed`，但 schema/语义错误会作为失败透出。
+///
+/// # Errors
+/// FayManifest 解析（`FM_PARSE_FAIL`）或语义校验（`FM_*`）失败时透出 `FaygerError`
+/// （经 [`CliError::Failure`]）。
+pub fn assemble_manifest(json: &str) -> Result<String, CliError> {
+    let report = assemble_str(json, &StubRegistry)?;
+    Ok(report.render())
+}
+
+/// Evaluates a FayManifest operation against a CAP driver manifest.
+///
+/// The authorization evidence is an explicitly non-production local fixture.
+/// This keeps the vertical slice auditable without freezing CAP D-1/D-2/D-5/D-6.
+pub fn evaluate_manifest_command(
+    faymanifest_json: &str,
+    driver_json: &str,
+    resource_id: &str,
+    operation_id: &str,
+) -> Result<String, CliError> {
+    let manifest = FayManifest::from_json_str(faymanifest_json)?;
+    manifest.validate()?;
+    if !manifest
+        .protocols
+        .iter()
+        .any(|protocol| protocol.id == "cap_protocol")
+    {
+        return Err(command_validation("CapProtocolNotDeclared", "protocols").into());
+    }
+
+    let driver = DriverManifest::from_json_str(driver_json)?;
+    if !manifest
+        .drivers
+        .iter()
+        .any(|declared| declared.driver_package == driver.driver_package)
+    {
+        return Err(
+            command_validation("DriverPackageNotDeclared", "drivers[].driverPackage").into(),
+        );
+    }
+    let fay_id = manifest
+        .fay_id
+        .as_deref()
+        .ok_or_else(|| command_validation("FayIdRequiredForAudit", "fayId"))?;
+
+    let request_id = format!("demo::{fay_id}::{resource_id}::{operation_id}");
+    let request = EvaluationRequest::new(&request_id, fay_id, resource_id, operation_id)?;
+    let evidence = AuthorizationEvidence::active_demo_fixture(
+        format!("demo-mandate::{fay_id}"),
+        fay_id,
+        resource_id,
+        operation_id,
+    )?;
+    let record = evaluate_command(&driver, &request, &evidence)?;
+    let operation_status = match record.decision {
+        Decision::AllowSimulation => "simulated_success",
+        Decision::HoldForPolicy | Decision::Deny => "not_executed",
+    };
+    let operation_result = if record.decision == Decision::AllowSimulation
+        && resource_id == "flight_controller"
+        && operation_id == "read_telemetry"
+    {
+        serde_json::json!({
+            "telemetry_status": "nominal",
+            "gps_lock": true,
+            "battery_percent": 87
+        })
+    } else {
+        serde_json::Value::Null
+    };
+    let audit = serde_json::json!({
+        "schema_version": "fayger-mvp-command/0.1",
+        "fayger_version": env!("CARGO_PKG_VERSION"),
+        "release_channel": "prerelease",
+        "evaluation": &record,
+        "operation": {
+            "mode": "simulation",
+            "status": operation_status,
+            "result": operation_result
+        }
+    });
+    let audit_json = serde_json::to_string_pretty(&audit).map_err(|error| {
+        CliError::Failure(
+            command_validation("AuditSerializationFailed", "evaluation_record")
+                .with_context("detail", ContextValue::string(error.to_string())),
+        )
+    })?;
+    let decision = match record.decision {
+        Decision::AllowSimulation => "ALLOW_SIMULATION",
+        Decision::HoldForPolicy => "HOLD_FOR_POLICY",
+        Decision::Deny => "DENY",
+    };
+
+    Ok(format!(
+        "iFay command evaluation\n  app:                 {}\n  fay_id:              {}\n  driver:              {}\n  operation:           {}/{}\n  criticality:         {}\n  decision:            {}\n  reason:              {}\n  operation_status:    {}\n  production_verified: false\n\nAudit record (JSON)\n{}",
+        manifest.name,
+        fay_id,
+        driver.driver_package,
+        resource_id,
+        operation_id,
+        record.criticality,
+        decision,
+        record.reason,
+        operation_status,
+        audit_json,
+    ))
+}
+
+/// Runs the bundled one-command drone telemetry vertical slice.
+pub fn demo_drone_command() -> Result<String, CliError> {
+    evaluate_manifest_command(
+        include_str!("../../fayger-faymanifest/examples/drone-controller.faymanifest.json"),
+        include_str!("../../fayger-cap/examples/drone.driver.json"),
+        "flight_controller",
+        "read_telemetry",
+    )
+}
+
+fn command_validation(reason: &'static str, field: &'static str) -> FaygerError {
+    FaygerError::new(
+        ErrorCode::FmValidationFailed,
+        Layer::Assembler,
+        "Fayger command evaluation validation failed",
+    )
+    .with_context("reason", ContextValue::string(reason))
+    .with_context("field", ContextValue::string(field))
+}
+
 /// 兜底空对象（仅当 demo 构造异常时使用，正常路径不会触发）。
 fn empty_object() -> BuFObject {
     let manifest = BuFManifest {
@@ -333,7 +469,10 @@ fn empty_object() -> BuFObject {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use super::{default_policy, demo_object, inspect_object, pack_bytes, run_object};
+    use super::{
+        assemble_manifest, default_policy, demo_drone_command, demo_object,
+        evaluate_manifest_command, inspect_object, pack_bytes, run_object,
+    };
     use fayger_loader::load;
     use fayger_runtime::LifecycleState;
 
@@ -341,6 +480,57 @@ mod tests {
     fn default_policy_accepts_1_0_0() {
         let p = default_policy();
         assert_eq!(p.runtime_interface_provided.to_string(), "1.0.0");
+    }
+
+    #[test]
+    fn evaluate_rejects_manifest_without_cap_protocol() {
+        let faymanifest = r#"{
+          "name":"x","version":"1.0.0","description":"d","vendor":"v",
+          "fayId":"urn:ifay:demo:x","modules":[],"protocols":[],
+          "controlMode":"command",
+          "drivers":[{"name":"d","type":"device","driverPackage":"@demo/driver"}]
+        }"#;
+        let driver = r#"{
+          "driver_package":"@demo/driver","version":"0.1.0",
+          "resources":[{"id":"r","operations":[
+            {"id":"read","mode":"read","criticality":"routine"}
+          ]}]
+        }"#;
+
+        assert!(evaluate_manifest_command(faymanifest, driver, "r", "read").is_err());
+    }
+
+    #[test]
+    fn bundled_drone_demo_completes_simulated_telemetry() {
+        let output = demo_drone_command().expect("bundled demo");
+        assert!(output.contains("ALLOW_SIMULATION"));
+        assert!(output.contains("simulated_success"));
+        assert!(output.contains("telemetry_status"));
+    }
+
+    #[test]
+    fn evaluate_rejects_missing_fay_id_and_undeclared_driver() {
+        let no_fay_id = r#"{
+          "name":"x","version":"1.0.0","description":"d","vendor":"v",
+          "modules":[],"protocols":[{"id":"cap_protocol"}],
+          "controlMode":"command",
+          "drivers":[{"name":"d","type":"device","driverPackage":"@demo/driver"}]
+        }"#;
+        let wrong_driver = r#"{
+          "name":"x","version":"1.0.0","description":"d","vendor":"v",
+          "fayId":"urn:ifay:demo:x","modules":[],
+          "protocols":[{"id":"cap_protocol"}],"controlMode":"command",
+          "drivers":[{"name":"d","type":"device","driverPackage":"@demo/other"}]
+        }"#;
+        let driver = r#"{
+          "driver_package":"@demo/driver","version":"0.1.0",
+          "resources":[{"id":"r","operations":[
+            {"id":"read","mode":"read","criticality":"routine"}
+          ]}]
+        }"#;
+
+        assert!(evaluate_manifest_command(no_fay_id, driver, "r", "read").is_err());
+        assert!(evaluate_manifest_command(wrong_driver, driver, "r", "read").is_err());
     }
 
     #[test]
@@ -416,5 +606,24 @@ mod tests {
         let text = render_bridge_report(&report);
         assert!(text.contains("Bridge report"));
         assert!(text.contains("host syscalls"));
+    }
+
+    #[test]
+    fn assemble_manifest_renders_report() {
+        let json = r#"{
+            "name": "x", "version": "1.0.0", "description": "d", "vendor": "v",
+            "modules": [{"id":"sensor"}], "protocols": [{"id":"cap_protocol"}],
+            "controlMode": "command"
+        }"#;
+        let text = assemble_manifest(json).expect("assemble");
+        assert!(text.contains("FayManifest assembly report"));
+        assert!(text.contains("resolvedPhase: 2"));
+        assert!(text.contains("faying_protocol"));
+    }
+
+    #[test]
+    fn assemble_manifest_propagates_parse_failure() {
+        let err = assemble_manifest("{ not valid").expect_err("parse fail");
+        assert!(matches!(err, crate::error::CliError::Failure(_)));
     }
 }

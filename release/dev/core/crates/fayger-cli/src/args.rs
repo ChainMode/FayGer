@@ -27,6 +27,22 @@ pub enum Command {
         /// BuF 文件路径。
         path: String,
     },
+    /// 解析并装配一个 FayManifest（JSON），打印依赖解析报告。
+    Assemble {
+        /// FayManifest JSON 文件路径。
+        path: String,
+    },
+    /// Evaluate one CAP operation against a FayManifest and driver manifest.
+    Evaluate {
+        /// FayManifest JSON path.
+        manifest: String,
+        /// CAP driver manifest JSON path.
+        driver: String,
+        /// Driver resource id.
+        resource: String,
+        /// Driver operation id.
+        operation: String,
+    },
     /// 把若干 section 文件封装为一个可加载的 BuF。
     Pack {
         /// 入口名。
@@ -38,6 +54,8 @@ pub enum Command {
     },
     /// 在内存中构造并运行一个示例 BuF（安装自检）。
     Demo,
+    /// Run the complete local drone telemetry MVP demonstration.
+    DemoDrone,
     /// 打印用法帮助。
     Help {
         /// 可选的子命令主题。
@@ -73,7 +91,11 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
         }),
         "version" | "--version" | "-V" => Ok(Command::Version),
         "info" => Ok(Command::Info),
-        "demo" => Ok(Command::Demo),
+        "demo" => match args.get(1).map(String::as_str) {
+            None => Ok(Command::Demo),
+            Some("drone") if args.len() == 2 => Ok(Command::DemoDrone),
+            Some(other) => Err(CliError::Usage(format!("unknown demo scenario: {other}"))),
+        },
         "inspect" => {
             let path = require_positional(args, "inspect <file>")?;
             Ok(Command::Inspect { path })
@@ -86,9 +108,60 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
             let path = require_positional(args, "bridge <file>")?;
             Ok(Command::Bridge { path })
         }
+        "assemble" => {
+            let path = require_positional(args, "assemble <file>")?;
+            Ok(Command::Assemble { path })
+        }
+        "evaluate" => parse_evaluate(&args[1..]),
         "pack" => parse_pack(&args[1..]),
         other => Err(CliError::Usage(format!("unknown command: {other}"))),
     }
+}
+
+/// Parses the four named inputs for the MVP CAP evaluator.
+fn parse_evaluate(rest: &[String]) -> Result<Command, CliError> {
+    let mut manifest = None;
+    let mut driver = None;
+    let mut resource = None;
+    let mut operation = None;
+    let mut i = 0;
+
+    while i < rest.len() {
+        let (slot, usage) = match rest[i].as_str() {
+            "--manifest" => (&mut manifest, "--manifest <faymanifest.json>"),
+            "--driver" => (&mut driver, "--driver <driver.json>"),
+            "--resource" => (&mut resource, "--resource <resource-id>"),
+            "--operation" => (&mut operation, "--operation <operation-id>"),
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected evaluate argument: {other}"
+                )));
+            }
+        };
+        if slot.is_some() {
+            return Err(CliError::Usage(format!(
+                "duplicate evaluate argument: {}",
+                rest[i]
+            )));
+        }
+        *slot = Some(next_value(rest, i, usage)?);
+        i += 2;
+    }
+
+    Ok(Command::Evaluate {
+        manifest: manifest.ok_or_else(|| {
+            CliError::Usage("evaluate requires --manifest <faymanifest.json>".to_owned())
+        })?,
+        driver: driver.ok_or_else(|| {
+            CliError::Usage("evaluate requires --driver <driver.json>".to_owned())
+        })?,
+        resource: resource.ok_or_else(|| {
+            CliError::Usage("evaluate requires --resource <resource-id>".to_owned())
+        })?,
+        operation: operation.ok_or_else(|| {
+            CliError::Usage("evaluate requires --operation <operation-id>".to_owned())
+        })?,
+    })
 }
 
 /// 取第 1 个位置参数（索引 1）。缺失或多余 → Usage。
@@ -197,9 +270,13 @@ pub fn usage_text(topic: Option<&str>) -> String {
         Some("inspect") => {
             "fayger inspect <file.buf>\n    加载并校验一个 BuF，打印 Manifest 摘要。".to_owned()
         }
+        Some("assemble") => {
+            "fayger assemble <faymanifest.json>\n    解析并装配一个 FayManifest（草案）：校验 schema、自动补充基础设施、判定解析阶段并报告依赖。注册表后端为 H1 占位（stub）。".to_owned()
+        }
+        Some("evaluate") => "fayger evaluate --manifest <faymanifest.json> --driver <driver.json> --resource <resource-id> --operation <operation-id>\n    以本地演示策略评估一个 CAP 操作，输出人类摘要与机器可读审计记录；不是生产 Faying 授权。".to_owned(),
         Some("pack") => "fayger pack --entry <name> --section <id>:<kind>=<path> [...] -o <out>\n    把若干 section 文件封装为一个可加载的 BuF。kind ∈ {code,data,asset}。".to_owned(),
         Some("info") => "fayger info\n    探测宿主环境并打印选中的适配器与授予能力。".to_owned(),
-        Some("demo") => "fayger demo\n    在内存中构造并运行一个示例 BuF（安装自检）。".to_owned(),
+        Some("demo") => "fayger demo [drone]\n    无参数时运行 BuF 安装自检；drone 运行完整的本地无人机遥测 MVP。".to_owned(),
         Some("version") => "fayger version\n    打印运行基座版本与 Runtime_Interface 版本。".to_owned(),
         _ => TOP_LEVEL_USAGE.to_owned(),
     }
@@ -216,17 +293,22 @@ fayger - Fay 多平台虚拟运行环境（运行基座）
     run <file.buf>       加载并运行一个 BuF
     bridge <file.buf>    加载并经适配层在当前宿主上运行一个 BuF（打印 HostSyscall）
     inspect <file.buf>   加载并校验一个 BuF，打印 Manifest 摘要
+    assemble <file.json> 解析并装配一个 FayManifest（草案），打印依赖解析报告
+    evaluate ...         评估一个本地 CAP 演示操作并输出审计记录
     pack ...             把若干 section 文件封装为一个可加载的 BuF
     info                 探测宿主环境并打印选中的适配器与授予能力
-    demo                 在内存中构造并运行一个示例 BuF（安装自检）
+    demo [drone]         运行安装自检或完整无人机遥测 MVP
     version              打印版本信息
     help [命令]          打印用法帮助
 
 示例：
     fayger version
     fayger demo
+    fayger demo drone
     fayger inspect app.buf
     fayger run app.buf
+    fayger assemble drone.faymanifest.json
+    fayger evaluate --manifest drone.faymanifest.json --driver drone.driver.json --resource flight_controller --operation read_telemetry
     fayger pack --entry main --section code:code=main.bin -o app.buf";
 
 #[cfg(test)]
@@ -271,6 +353,10 @@ mod tests {
     fn info_and_demo() {
         assert_eq!(parse_args(&argv(&["info"])).expect("ok"), Command::Info);
         assert_eq!(parse_args(&argv(&["demo"])).expect("ok"), Command::Demo);
+        assert_eq!(
+            parse_args(&argv(&["demo", "drone"])).expect("ok"),
+            Command::DemoDrone
+        );
     }
 
     #[test]
@@ -299,6 +385,54 @@ mod tests {
         );
         assert!(matches!(
             parse_args(&argv(&["bridge"])),
+            Err(CliError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn assemble_takes_path_and_missing_is_usage() {
+        assert_eq!(
+            parse_args(&argv(&["assemble", "m.json"])).expect("ok"),
+            Command::Assemble {
+                path: "m.json".to_owned()
+            }
+        );
+        assert!(matches!(
+            parse_args(&argv(&["assemble"])),
+            Err(CliError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn evaluate_requires_all_named_arguments() {
+        assert_eq!(
+            parse_args(&argv(&[
+                "evaluate",
+                "--manifest",
+                "drone.faymanifest.json",
+                "--driver",
+                "dji.driver.json",
+                "--resource",
+                "flight_controller",
+                "--operation",
+                "read_telemetry",
+            ]))
+            .expect("valid evaluate args"),
+            Command::Evaluate {
+                manifest: "drone.faymanifest.json".to_owned(),
+                driver: "dji.driver.json".to_owned(),
+                resource: "flight_controller".to_owned(),
+                operation: "read_telemetry".to_owned(),
+            }
+        );
+        assert!(matches!(
+            parse_args(&argv(&[
+                "evaluate",
+                "--manifest",
+                "drone.faymanifest.json",
+                "--driver",
+                "dji.driver.json",
+            ])),
             Err(CliError::Usage(_))
         ));
     }

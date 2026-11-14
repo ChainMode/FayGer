@@ -36,10 +36,23 @@ fn demo_runs_to_terminated() {
 }
 
 #[test]
+fn drone_demo_runs_the_vertical_slice_with_one_command() {
+    let (r, text) = run(&["demo", "drone"]);
+    assert!(r.is_ok(), "drone demo should succeed: {r:?}");
+    assert!(text.contains("drone-controller-ifay"));
+    assert!(text.contains("ALLOW_SIMULATION"));
+    assert!(text.contains("simulated_success"));
+    assert!(text.contains("\"telemetry_status\": \"nominal\""));
+    assert!(text.contains("\"production_verified\": false"));
+    assert!(text.contains("\"fayger_version\": \"0.1.0-rc.1\""));
+    assert!(text.contains("\"release_channel\": \"prerelease\""));
+}
+
+#[test]
 fn version_reports_versions() {
     let (r, text) = run(&["version"]);
     assert!(r.is_ok());
-    assert!(text.contains("fayger 0.0.0"));
+    assert!(text.contains("fayger 0.1.0-rc.1"));
     assert!(text.contains("runtime-interface 1.0.0"));
 }
 
@@ -73,4 +86,58 @@ fn pack_load_run_in_memory_round_trip() {
     let report = run_object(obj).expect("run");
     assert_eq!(report.final_state, LifecycleState::Terminated);
     assert_eq!(report.dispatched, 2);
+}
+
+#[test]
+fn assemble_drone_example_reports_phase_2() {
+    // 指向 fayger-faymanifest crate 内的蓝图无人机样例（相对路径，避免内嵌 JSON）。
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fayger-faymanifest/examples/drone-controller.faymanifest.json"
+    );
+    let (r, text) = run(&["assemble", path]);
+    assert!(r.is_ok(), "assemble should succeed: {r:?}");
+    assert_eq!(exit_code_of(&r), ExitCode::Success);
+    assert!(text.contains("FayManifest assembly report"));
+    assert!(text.contains("resolvedPhase: 2"));
+    assert!(text.contains("@ego-models/drone-pilot-v1"));
+    assert!(text.contains("stubbed"));
+}
+
+#[test]
+fn assemble_missing_file_is_io_failure() {
+    let (r, _) = run(&["assemble", "/no/such/manifest.json"]);
+    assert!(matches!(r, Err(CliError::Io { .. })));
+    assert_eq!(exit_code_of(&r), ExitCode::Failure);
+}
+
+#[test]
+fn evaluate_drone_telemetry_emits_auditable_demo_record() {
+    let faymanifest = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fayger-faymanifest/examples/drone-controller.faymanifest.json"
+    );
+    let driver = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fayger-cap/examples/drone.driver.json"
+    );
+    let (r, text) = run(&[
+        "evaluate",
+        "--manifest",
+        faymanifest,
+        "--driver",
+        driver,
+        "--resource",
+        "flight_controller",
+        "--operation",
+        "read_telemetry",
+    ]);
+
+    assert!(r.is_ok(), "evaluate should succeed: {r:?}");
+    assert!(text.contains("iFay command evaluation"));
+    assert!(text.contains("ALLOW_SIMULATION"));
+    assert!(text.contains("simulated_success"));
+    assert!(text.contains("\"telemetry_status\": \"nominal\""));
+    assert!(text.contains("\"production_verified\": false"));
+    assert!(text.contains("CAP-D-1"));
 }

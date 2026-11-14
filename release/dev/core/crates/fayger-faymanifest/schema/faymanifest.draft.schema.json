@@ -1,0 +1,257 @@
+{
+  "$defs": {
+    "componentId": {
+      "description": "Module / protocol id: lowercase, snake_case (underscore separator).",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "driverRef": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "description": "Driver-specific configuration (free-form).",
+          "type": "object"
+        },
+        "driverPackage": {
+          "$ref": "#/$defs/packageIdentifier",
+          "description": "Driver package id, e.g. @drone-drivers/dji-fc."
+        },
+        "name": {
+          "description": "Human-readable driver name.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": {
+          "description": "Driver type. Blueprint example uses 'device'; enum frozen by the registry design (H2).",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "driverPackage"
+      ],
+      "type": "object"
+    },
+    "egoConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "constraints": {
+          "description": "Constraint parameters (free-form). Blueprint example includes skillBoundaries.allowed / skillBoundaries.restricted.",
+          "properties": {
+            "skillBoundaries": {
+              "properties": {
+                "allowed": {
+                  "description": "Allowed skill domains.",
+                  "items": {
+                    "description": "Skill domain.",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "restricted": {
+                  "description": "Restricted skill domains.",
+                  "items": {
+                    "description": "Skill domain.",
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "modelSource": {
+          "$ref": "#/$defs/packageIdentifier",
+          "description": "Ego model source, e.g. @ego-models/drone-pilot-v1."
+        },
+        "scenarioTags": {
+          "description": "Applicable scenario tags.",
+          "items": {
+            "description": "Scenario tag.",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "modelSource"
+      ],
+      "type": "object"
+    },
+    "fayIdRef": {
+      "description": "FayID identity reference (opaque string; format defined by the fayid spec authority).",
+      "minLength": 1,
+      "type": "string"
+    },
+    "moduleRef": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "description": "Module-specific configuration (free-form).",
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/componentId"
+        },
+        "provider": {
+          "description": "Vendor implementation id (optional).",
+          "type": "string"
+        },
+        "version": {
+          "$ref": "#/$defs/versionConstraint"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "packageIdentifier": {
+      "description": "Namespace-scoped package id @scope/name. Blueprint namespaces: @drone-drivers/... and @ego-models/...",
+      "pattern": "^@[a-z0-9]([a-z0-9-]*[a-z0-9])?/[a-z0-9]([a-z0-9._-]*[a-z0-9])?$",
+      "type": "string"
+    },
+    "permissionsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "authMethods": {
+          "description": "Supported authentication methods.",
+          "items": {
+            "description": "Authentication method identifier.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inherent": {
+          "description": "Inherent permissions.",
+          "items": {
+            "description": "Permission identifier.",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "persistent": {
+          "description": "Persistent permissions.",
+          "items": {
+            "description": "Permission identifier.",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "protocolRef": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "description": "Protocol-specific configuration (free-form).",
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/componentId"
+        },
+        "version": {
+          "$ref": "#/$defs/versionConstraint"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "semver": {
+      "description": "SemVer 2.0.0 version (no build metadata).",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$",
+      "type": "string"
+    },
+    "versionConstraint": {
+      "description": "Version constraint: * (any), exact (1.2.3 / =1.2.3), caret (^1.2.3), tilde (~1.2.3), comparators (>=, >, <=, <).",
+      "pattern": "^(\\*|(\\^|~|>=|<=|>|<|=)?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?)$",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Declarative assembly manifest (iFay's package.json). DERIVED copy generated from the fayger-faymanifest Rust model; the authoritative machine-readable schema is owned by ifay (openspec change add-faymanifest-schema-authority), narrative authority is ifay blueprint 13.",
+  "properties": {
+    "controlMode": {
+      "description": "Control mode: command / ego / autonomous.",
+      "enum": [
+        "command",
+        "ego",
+        "autonomous"
+      ],
+      "type": "string"
+    },
+    "description": {
+      "description": "Functional description.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "drivers": {
+      "description": "Driver configurations (optional).",
+      "items": {
+        "$ref": "#/$defs/driverRef"
+      },
+      "type": "array"
+    },
+    "ego": {
+      "$ref": "#/$defs/egoConfig",
+      "description": "Ego model configuration (optional). Declaring this auto-supplements the ego_model module."
+    },
+    "fayId": {
+      "$ref": "#/$defs/fayIdRef",
+      "description": "Optional FayID identity reference. When omitted, identity infrastructure is auto-supplemented during assembly. FayID spec authority lives in the fayid repo."
+    },
+    "modules": {
+      "description": "Declared business modules. Infrastructure modules are auto-supplemented.",
+      "items": {
+        "$ref": "#/$defs/moduleRef"
+      },
+      "type": "array"
+    },
+    "name": {
+      "description": "Name of the iFay implementation.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "permissions": {
+      "$ref": "#/$defs/permissionsConfig",
+      "description": "Permission configuration (optional)."
+    },
+    "protocols": {
+      "description": "Declared protocols. Infrastructure protocols (e.g. Faying) are auto-supplemented.",
+      "items": {
+        "$ref": "#/$defs/protocolRef"
+      },
+      "type": "array"
+    },
+    "vendor": {
+      "description": "Developer / vendor name.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "version": {
+      "$ref": "#/$defs/semver",
+      "description": "Version of the iFay implementation itself (SemVer)."
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "description",
+    "vendor",
+    "modules",
+    "protocols",
+    "controlMode"
+  ],
+  "title": "FayManifest (DRAFT)",
+  "type": "object",
+  "x-id": "urn:ifay:schema:faymanifest:draft",
+  "x-json-schema-dialect": "draft 2020-12 (referenced by name; remote $schema URI intentionally omitted for this offline draft artifact)",
+  "x-status": "DERIVED (fayger-side) from the ifay authoritative FayManifest schema (ifay openspec change add-faymanifest-schema-authority); this generated artifact MUST conform to that authority. Narrative authority: ifay blueprint 13."
+}

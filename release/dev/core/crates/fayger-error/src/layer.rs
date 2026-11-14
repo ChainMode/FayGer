@@ -1,7 +1,10 @@
 //! `Layer` 标签：标注错误源自 Fayger 的哪一层。
 //!
 //! 蓝图 §6.1 把所有跨层错误标注 `source_layer` 字段，并要求上层包装时不重写这个字段。
-//! M0 阶段实际只产生 `Loader` 层错误，但为后续里程碑预留四个变体。
+//! M0 阶段实际只产生 `Loader` 层错误，但为后续里程碑预留更多变体。
+//!
+//! `Assembler` 变体由 H1-PROTO-02（FayManifest 装配草案）追加：FayManifest 的解析、
+//! schema 校验与依赖解析发生在「装配」阶段，逻辑上先于 Loader 的字节级加载。
 
 use std::fmt;
 
@@ -20,6 +23,11 @@ pub enum Layer {
     Adapter,
     /// 宿主层：错误最终源头是宿主侧（系统调用、SDK 等）。M0 不使用。
     Host,
+    /// 装配层：FayManifest 的解析、schema 校验与依赖解析（H1-PROTO-02 草案）。
+    ///
+    /// 装配在逻辑上先于 Loader 的字节级加载：开发者声明的 FayManifest 经此层解析出
+    /// 组件/协议/驱动依赖与解析阶段（Resolved Stage），再交由后续加载/运行。
+    Assembler,
 }
 
 impl fmt::Display for Layer {
@@ -29,6 +37,7 @@ impl fmt::Display for Layer {
             Self::Runtime => "runtime",
             Self::Adapter => "adapter",
             Self::Host => "host",
+            Self::Assembler => "assembler",
         };
         f.write_str(s)
     }
@@ -44,6 +53,7 @@ mod tests {
         assert_eq!(Layer::Runtime.to_string(), "runtime");
         assert_eq!(Layer::Adapter.to_string(), "adapter");
         assert_eq!(Layer::Host.to_string(), "host");
+        assert_eq!(Layer::Assembler.to_string(), "assembler");
     }
 
     #[test]

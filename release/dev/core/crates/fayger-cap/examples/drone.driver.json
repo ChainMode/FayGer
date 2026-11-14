@@ -1,0 +1,36 @@
+{
+  "driver_package": "@drone-drivers/dji-fc",
+  "version": "0.1.0",
+  "resources": [
+    {
+      "id": "flight_controller",
+      "operations": [
+        {
+          "id": "read_telemetry",
+          "mode": "read",
+          "criticality": "routine"
+        },
+        {
+          "id": "upload_firmware",
+          "mode": "configure",
+          "criticality": "high"
+        },
+        {
+          "id": "arm_motors",
+          "mode": "execute",
+          "criticality": "critical"
+        }
+      ],
+      "safe_states": [
+        {
+          "id": "hover",
+          "description": "Hold the current position when airborne."
+        },
+        {
+          "id": "return_home",
+          "description": "Return to the configured home point."
+        }
+      ]
+    }
+  ]
+}

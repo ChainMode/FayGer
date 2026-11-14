@@ -100,6 +100,23 @@ pub enum ErrorCode {
     /// `RT_QUOTA_EXCEEDED`：BuF_Instance 资源用量超出 BuF_Manifest 声明的配额。
     /// 超限信息（资源类型与用量）通过运行层查询接口暴露。
     RtQuotaExceeded,
+
+    // ----- 装配层 (H1-PROTO-02 · FayManifest 草案) -----
+    /// `FM_PARSE_FAIL`：FayManifest JSON 无法解析，或不符合结构（未知字段、类型不符、
+    /// 缺顶层必填键、控制模式取值非法等由 serde 在反序列化阶段拒绝的情形）。
+    /// `context.detail` 携带底层解析器的错误描述。
+    FmParseFail,
+    /// `FM_VALIDATION_FAILED`：FayManifest 通过了结构解析，但语义校验失败。
+    /// 由 `context.reason` 区分：`EmptyRequiredField`（name/version/description/vendor 为空）、
+    /// `InvalidVersion`（顶层 version 非合法 SemVer）、`DuplicateComponent`（模块/协议 id 重复）、
+    /// `InvalidComponentId`（id 不符 `^[a-z][a-z0-9_]*$`）。
+    FmValidationFailed,
+    /// `FM_INVALID_VERSION_CONSTRAINT`：模块/协议的 `version` 不是合法的版本约束
+    /// （`*` / 精确 / `^` / `~` / 比较符）。`context` 含 `component` 与原始 `constraint`。
+    FmInvalidVersionConstraint,
+    /// `FM_INVALID_NAMESPACE`：驱动 `driverPackage` 或 Ego `modelSource` 不是合法的
+    /// 命名空间限定包标识（形如 `@scope/name`）。`context` 含 `field` 与原始 `value`。
+    FmInvalidNamespace,
 }
 
 impl ErrorCode {
@@ -127,6 +144,10 @@ impl ErrorCode {
             Self::LdrLazyDigestMismatch => "LDR_LAZY_DIGEST_MISMATCH",
             Self::LdrProfileRequiredSectionMissing => "LDR_PROFILE_REQUIRED_SECTION_MISSING",
             Self::RtQuotaExceeded => "RT_QUOTA_EXCEEDED",
+            Self::FmParseFail => "FM_PARSE_FAIL",
+            Self::FmValidationFailed => "FM_VALIDATION_FAILED",
+            Self::FmInvalidVersionConstraint => "FM_INVALID_VERSION_CONSTRAINT",
+            Self::FmInvalidNamespace => "FM_INVALID_NAMESPACE",
         }
     }
 }
@@ -205,6 +226,19 @@ mod tests {
             "LDR_PROFILE_REQUIRED_SECTION_MISSING"
         );
         assert_eq!(ErrorCode::RtQuotaExceeded.as_str(), "RT_QUOTA_EXCEEDED");
+        assert_eq!(ErrorCode::FmParseFail.as_str(), "FM_PARSE_FAIL");
+        assert_eq!(
+            ErrorCode::FmValidationFailed.as_str(),
+            "FM_VALIDATION_FAILED"
+        );
+        assert_eq!(
+            ErrorCode::FmInvalidVersionConstraint.as_str(),
+            "FM_INVALID_VERSION_CONSTRAINT"
+        );
+        assert_eq!(
+            ErrorCode::FmInvalidNamespace.as_str(),
+            "FM_INVALID_NAMESPACE"
+        );
     }
 
     #[test]
@@ -230,6 +264,10 @@ mod tests {
             ErrorCode::LdrLazyDigestMismatch,
             ErrorCode::LdrProfileRequiredSectionMissing,
             ErrorCode::RtQuotaExceeded,
+            ErrorCode::FmParseFail,
+            ErrorCode::FmValidationFailed,
+            ErrorCode::FmInvalidVersionConstraint,
+            ErrorCode::FmInvalidNamespace,
         ] {
             assert_eq!(code.to_string(), code.as_str());
         }

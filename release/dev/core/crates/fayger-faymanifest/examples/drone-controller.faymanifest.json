@@ -1,0 +1,52 @@
+{
+  "name": "drone-controller-ifay",
+  "version": "1.0.0",
+  "description": "iFay implementation for drone control",
+  "vendor": "DroneAI Corp",
+  "fayId": "urn:ifay:demo:drone-controller",
+
+  "modules": [
+    { "id": "device_driver_hub", "version": "^1.0.0" },
+    { "id": "sensor", "config": { "types": ["gps", "imu", "camera", "lidar"] } },
+    { "id": "invoke_skill", "version": "^1.0.0" },
+    { "id": "registered_skill", "config": { "preload": ["flight_control", "obstacle_avoidance"] } }
+  ],
+
+  "protocols": [
+    { "id": "cap_protocol", "config": { "targets": ["flight_controller", "gimbal", "camera"] } },
+    { "id": "dtp_protocol", "config": { "bandwidth": "high", "realtime": true } }
+  ],
+
+  "controlMode": "ego",
+
+  "drivers": [
+    {
+      "name": "DJI Flight Controller",
+      "type": "device",
+      "driverPackage": "@drone-drivers/dji-fc",
+      "config": { "model": "A3", "firmwareVersion": "^3.0.0" }
+    },
+    {
+      "name": "Gimbal Controller",
+      "type": "device",
+      "driverPackage": "@drone-drivers/gimbal-generic"
+    }
+  ],
+
+  "ego": {
+    "modelSource": "@ego-models/drone-pilot-v1",
+    "scenarioTags": ["aerial_photography", "inspection", "mapping"],
+    "constraints": {
+      "skillBoundaries": {
+        "allowed": ["flight", "camera", "navigation"],
+        "restricted": ["financial", "social"]
+      }
+    }
+  },
+
+  "permissions": {
+    "inherent": ["device_control", "sensor_read"],
+    "persistent": ["flight_plan_execute"],
+    "authMethods": ["device_fingerprint"]
+  }
+}

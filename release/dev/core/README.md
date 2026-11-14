@@ -2,6 +2,10 @@
 
 Fayger 第一阶段开发的主参考实现，作为 Cargo workspace 组织。
 
+当前本地预发布候选版：`0.1.0-rc.1`。它提供可审计的无人机遥测模拟，明确不包含
+生产 Faying 授权或真实硬件控制。完整发布说明见 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，
+PO 验收步骤见 [`docs/PRERELEASE_ACCEPTANCE.md`](docs/PRERELEASE_ACCEPTANCE.md)。
+
 ## Crates
 
 | Crate | 状态 | 说明 |
@@ -14,6 +18,8 @@ Fayger 第一阶段开发的主参考实现，作为 Cargo workspace 组织。
 | `fayger-observability` | M8 任务 2-4,8 | 可观测性事件总线：五类事件、订阅过滤、调试开关、逻辑时钟（蓝图 §6.5–§6.8） |
 | `fayger-cli` | M9 任务 1-11 / M10 任务 9 | 运行基座命令行：可安装的 `fayger` 可执行程序（run / inspect / pack / info / demo / bridge / version） |
 | `fayger-bridge` | M10 任务 1-10 | 运行层↔适配层统一桥接：指令翻译、经适配层派发为 HostSyscall、跨层错误链 |
+| `fayger-faymanifest` | H1-PROTO-02 | FayManifest 解析、校验、依赖装配与 ifay 权威 schema 一致性门禁 |
+| `fayger-cap` | H1-PROD-01 | CAP 驱动清单、保守风险评估与本地 MVP 审计记录 |
 
 更多 crate（`fayger-conformance` 等）会随后续里程碑加入。
 
@@ -28,12 +34,35 @@ cargo build --release -p fayger-cli --bin fayger
 # 运行
 ./target/release/fayger version     # 版本信息
 ./target/release/fayger demo        # 内存示例 BuF 运行自检（类似 docker run hello-world）
+./target/release/fayger demo drone  # 一条命令运行无人机遥测 MVP
 ./target/release/fayger info        # 探测宿主、选中适配器、列出授予能力
 ./target/release/fayger inspect app.buf   # 查看 BuF 元数据
 ./target/release/fayger run app.buf       # 运行一个 BuF
 ./target/release/fayger bridge app.buf    # 经真实适配层在当前宿主上运行（打印 HostSyscall）
 ./target/release/fayger pack --entry main --section code:code=main.bin -o app.buf  # 封装 BuF
 ```
+
+### 无人机 MVP 演示
+
+在 `release/dev/core/` 目录执行：
+
+```bash
+cargo run -q -p fayger-cli -- demo drone
+```
+
+该命令加载内置无人机 FayManifest 与 CAP 驱动清单，核对 FayID、CAP 协议声明和驱动归属，评估 `flight_controller/read_telemetry`，完成本地模拟遥测，并输出人类摘要与机器可读 JSON 审计记录。
+
+这是本地演示策略，不是生产 Faying 授权：审计记录固定包含 `production_verified: false` 和待裁定的 `CAP-D-1/D-2/D-5/D-6`。未知操作按 `critical` 拒绝；`high` 操作保持 `HOLD_FOR_POLICY`；两者都不会进入模拟执行。
+
+### 构建预发布审核包
+
+```bash
+./scripts/build-prerelease.sh
+```
+
+该命令运行 format、clippy、全量测试和文档门禁，再生成当前宿主平台的二进制、
+正负安全路径证据、验收指南和 SHA-256 校验值。产物位于 `target/prerelease/`，
+只用于本地审核，不会自动提交、打 tag 或发布。
 
 安装（放入 PATH，默认 `~/.fayger/bin`）与三平台分发见 [`docs/INSTALL.md`](docs/INSTALL.md)；本地脚本在 `scripts/`（`build-release.sh` / `install.sh`），打 tag 触发的三平台 release 工作流见 `.github/workflows/release.yml`。退出码约定：成功 `0`、用法错误 `2`、执行失败 `1`。
 

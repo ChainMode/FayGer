@@ -8,3 +8,6 @@
 !/README.md
 !/LICENSE
 !/.gitignore
+
+# 忽略所有子目录下的 macOS 元数据文件
+**/.DS_Store

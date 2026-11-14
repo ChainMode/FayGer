@@ -84,7 +84,7 @@ pub fn parse(bytes: &[u8]) -> Result<BuFObject, FaygerError> {
 
     let header = read_header(bytes)?;
 
-    // 验证 Header 中的 offset 字段不越界
+    // 验证 Header 中的 offset 字段不越界，且五段布局严格紧邻无重叠/空洞
     let total_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     check_offset_in_bounds(
         "manifest",
@@ -98,6 +98,7 @@ pub fn parse(bytes: &[u8]) -> Result<BuFObject, FaygerError> {
         header.section_index_length,
         total_len,
     )?;
+    verify_contiguous_header_segments(&header)?;
 
     // Manifest 段
     let manifest_bytes = slice_segment(bytes, header.manifest_offset, header.manifest_length)?;
@@ -244,19 +245,8 @@ pub fn parse_skeleton(
             ));
     }
 
-    // Manifest 与 Section_Index 偏移必须落在骨架内（[HEADER_SIZE, sections_region_offset]）。
-    check_skeleton_segment(
-        "manifest",
-        header.manifest_offset,
-        header.manifest_length,
-        sections_region_offset,
-    )?;
-    check_skeleton_segment(
-        "section_index",
-        header.section_index_offset,
-        header.section_index_length,
-        sections_region_offset,
-    )?;
+    // Manifest 与 Section_Index 偏移必须严格紧接在 Header 之后（[HEADER_SIZE, sections_region_offset]）。
+    verify_contiguous_header_segments(&header)?;
 
     let manifest_bytes = slice_segment(skeleton, header.manifest_offset, header.manifest_length)?;
     let manifest: BuFManifest = canonical_decode(manifest_bytes).map_err(|e| {
@@ -324,20 +314,28 @@ pub fn parse_skeleton(
     })
 }
 
-/// 检查 (offset, length) 落在 [HEADER_SIZE, region_end] 内（骨架版边界检查）。
-fn check_skeleton_segment(
-    field: &str,
-    offset: u64,
-    length: u64,
-    region_end: u64,
-) -> Result<(), FaygerError> {
-    let header_end = u64::try_from(HEADER_SIZE).unwrap_or(u64::MAX);
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| out_of_bounds(field, offset, length))?;
-    if offset < header_end || end > region_end {
-        return Err(out_of_bounds(field, offset, length)
-            .with_context("region_end", ContextValue::U64(region_end)));
+/// 校验 Header 声明的 Manifest 与 Section_Index 紧接在 Header 之后且互不重叠/无间隙。
+fn verify_contiguous_header_segments(header: &Header) -> Result<(), FaygerError> {
+    let expected_manifest_offset = u64::try_from(HEADER_SIZE).unwrap_or(u64::MAX);
+    if header.manifest_offset != expected_manifest_offset {
+        return Err(
+            out_of_bounds("manifest", header.manifest_offset, header.manifest_length).with_context(
+                "expected_offset",
+                ContextValue::U64(expected_manifest_offset),
+            ),
+        );
+    }
+    let expected_index_offset = header
+        .manifest_offset
+        .checked_add(header.manifest_length)
+        .ok_or_else(|| out_of_bounds("manifest", header.manifest_offset, header.manifest_length))?;
+    if header.section_index_offset != expected_index_offset {
+        return Err(out_of_bounds(
+            "section_index",
+            header.section_index_offset,
+            header.section_index_length,
+        )
+        .with_context("expected_offset", ContextValue::U64(expected_index_offset)));
     }
     Ok(())
 }
@@ -423,14 +421,24 @@ fn slice_segment(bytes: &[u8], offset: u64, length: u64) -> Result<&[u8], Fayger
 
 /// 用 Section_Index 把 sections_region 切成各段 payload。
 ///
-/// 同时检查每条索引项的 `offset+length` 是否越过 sections_region 的长度。
+/// 同时检查每条索引项的偏移严格连续（无空洞/重叠），且总长度精确铺满 `sections_region`（无未声明尾部冗余字节）。
 fn read_section_payloads(
     index: &[SectionIndexEntry],
     sections_region: &[u8],
 ) -> Result<Vec<Vec<u8>>, FaygerError> {
     let region_len = u64::try_from(sections_region.len()).unwrap_or(u64::MAX);
     let mut out = Vec::with_capacity(index.len());
+    let mut expected_offset: u64 = 0;
     for entry in index {
+        if entry.offset != expected_offset {
+            return Err(section_out_of_bounds(
+                &entry.section_id,
+                entry.offset,
+                entry.length,
+                region_len,
+            )
+            .with_context("expected_offset", ContextValue::U64(expected_offset)));
+        }
         let end = entry.offset.checked_add(entry.length).ok_or_else(|| {
             section_out_of_bounds(&entry.section_id, entry.offset, entry.length, region_len)
         })?;
@@ -449,6 +457,15 @@ fn read_section_payloads(
             section_out_of_bounds(&entry.section_id, entry.offset, entry.length, region_len)
         })?;
         out.push(sections_region[start..end_usize].to_vec());
+        expected_offset = end;
+    }
+    if expected_offset != region_len {
+        return Err(
+            parse_fail("sections region contains unindexed trailing bytes")
+                .with_context("reason", ContextValue::string("SectionOutOfBounds"))
+                .with_context("expected_region_length", ContextValue::U64(expected_offset))
+                .with_context("region_length", ContextValue::U64(region_len)),
+        );
     }
     Ok(out)
 }
@@ -968,6 +985,20 @@ mod tests {
         assert!(matches!(
             err.context.get("reason"),
             Some(ContextValue::String(s)) if s == "TrailerLengthMismatch"
+        ));
+    }
+
+    #[test]
+    fn rejects_overlapping_section_index_offset_inside_manifest() {
+        let (mut bytes, _, _) = build_buf_bytes(vec![]);
+        // 将 section_index_offset (偏移 24..32) 篡改为指向 manifest 内部字节，模拟位翻转重叠攻击
+        let overlapping_offset: u64 = (HEADER_SIZE as u64) + 1;
+        bytes[24..32].copy_from_slice(&overlapping_offset.to_le_bytes());
+        let err = parse(&bytes).expect_err("overlapping section_index_offset must fail");
+        assert_eq!(err.code, fayger_error::ErrorCode::LdrParseFail);
+        assert!(matches!(
+            err.context.get("reason"),
+            Some(ContextValue::String(s)) if s == "OffsetOutOfBounds"
         ));
     }
 }

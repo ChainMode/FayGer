@@ -1,0 +1,25 @@
+[package]
+name = "fayger-faymanifest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FayManifest 声明式装配清单：JSON Schema 草案 + 解析/校验/依赖解析 (H1-PROTO-02 草案)"
+
+[lints]
+workspace = true
+
+[lib]
+name = "fayger_faymanifest"
+path = "src/lib.rs"
+
+[dependencies]
+fayger-error = { path = "../fayger-error" }
+# 复用 BuF 的 SemVer（解析 + 全序比较），版本约束在本 crate 内基于它实现。
+fayger-buf = { path = "../fayger-buf" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

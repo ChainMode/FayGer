@@ -26,6 +26,9 @@ fayger-runtime = { path = "../fayger-runtime" }
 fayger-adapter = { path = "../fayger-adapter" }
 fayger-observability = { path = "../fayger-observability" }
 fayger-bridge = { path = "../fayger-bridge" }
+fayger-faymanifest = { path = "../fayger-faymanifest" }
+fayger-cap = { path = "../fayger-cap" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

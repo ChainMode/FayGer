@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/fayger-error", "crates/fayger-buf", "crates/fayger-loader", "crates/fayger-runtime", "crates/fayger-adapter", "crates/fayger-observability", "crates/fayger-cli", "crates/fayger-bridge"]
+members = ["crates/fayger-error", "crates/fayger-buf", "crates/fayger-loader", "crates/fayger-runtime", "crates/fayger-adapter", "crates/fayger-observability", "crates/fayger-cli", "crates/fayger-bridge", "crates/fayger-faymanifest", "crates/fayger-cap"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0-rc.1"
 edition = "2021"
 rust-version = "1.83"
 license = "Apache-2.0 OR MIT"
@@ -20,6 +20,10 @@ binrw = "0.14.1"
 
 # Serde：派生 Manifest / SectionDescriptor 等结构。
 serde = { version = "1.0", features = ["derive"] }
+
+# JSON：FayManifest 是 JSON 格式的声明文件（蓝图 §13）。serde_json 用于解析 FayManifest
+# 与按 Rust 单一事实源生成 FayManifest JSON Schema 草案。引入理由见 decisions/0001。
+serde_json = "1.0"
 
 # Property-based testing。反例归档由 proptest 自身写入 `proptest-regressions/` 目录。
 proptest = "1.5.0"

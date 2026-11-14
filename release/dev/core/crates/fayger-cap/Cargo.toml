@@ -1,0 +1,23 @@
+[package]
+name = "fayger-cap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CAP driver manifest and safe-state primitives for Fayger MVP integration"
+
+[lints]
+workspace = true
+
+[lib]
+name = "fayger_cap"
+path = "src/lib.rs"
+
+[dependencies]
+fayger-error = { path = "../fayger-error" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

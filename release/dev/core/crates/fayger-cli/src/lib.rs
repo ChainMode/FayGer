@@ -19,7 +19,7 @@
 //! assert!(text.contains("Terminated"));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/fayger-cli/0.0.0")]
+#![doc(html_root_url = "https://docs.rs/fayger-cli/0.1.0-rc.1")]
 
 pub mod args;
 pub mod commands;
@@ -29,8 +29,9 @@ pub mod host_profile;
 
 pub use args::{parse_args, usage_text, Command, PackSpec};
 pub use commands::{
-    bridge_object, default_policy, demo_object, inspect_object, pack_bytes, render_bridge_report,
-    run_object, RunReport,
+    assemble_manifest, bridge_object, default_policy, demo_drone_command, demo_object,
+    evaluate_manifest_command, inspect_object, pack_bytes, render_bridge_report, run_object,
+    RunReport,
 };
 pub use error::{exit_code_of, CliError, ExitCode};
 pub use host_profile::{detect_host_environment, info_text};
@@ -89,12 +90,46 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
             let report = bridge_object(obj)?;
             write_out(out, &render_bridge_report(&report))
         }
+        Command::Assemble { path } => {
+            let bytes = fs_ops::read_file(path)?;
+            let json = String::from_utf8(bytes).map_err(|e| CliError::Io {
+                path: path.clone(),
+                detail: format!("FayManifest is not valid UTF-8: {e}"),
+            })?;
+            let text = assemble_manifest(&json)?;
+            writeln_out(out, &text)
+        }
+        Command::Evaluate {
+            manifest,
+            driver,
+            resource,
+            operation,
+        } => {
+            let faymanifest_bytes = fs_ops::read_file(manifest)?;
+            let driver_bytes = fs_ops::read_file(driver)?;
+            let faymanifest_json =
+                String::from_utf8(faymanifest_bytes).map_err(|error| CliError::Io {
+                    path: manifest.clone(),
+                    detail: format!("FayManifest is not valid UTF-8: {error}"),
+                })?;
+            let driver_json = String::from_utf8(driver_bytes).map_err(|error| CliError::Io {
+                path: driver.clone(),
+                detail: format!("driver manifest is not valid UTF-8: {error}"),
+            })?;
+            let text =
+                evaluate_manifest_command(&faymanifest_json, &driver_json, resource, operation)?;
+            writeln_out(out, &text)
+        }
         Command::Demo => {
             let report = run_object(demo_object())?;
             writeln_out(
                 out,
                 &format!("Running in-memory demo BuF...\n{}", report.render()),
             )
+        }
+        Command::DemoDrone => {
+            let text = demo_drone_command()?;
+            writeln_out(out, &text)
         }
         Command::Pack {
             entry,
