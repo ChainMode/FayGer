@@ -29,6 +29,8 @@ pub mod builtin;
 pub mod capability;
 pub mod host;
 pub mod instruction;
+pub mod log_channel;
+pub mod real_exec;
 pub mod registry;
 
 pub use adapter::{AdapterDescriptor, PlatformAdapter};
@@ -36,4 +38,9 @@ pub use builtin::{BrowserAdapter, InAppAdapter, NativeDesktopAdapter, ServerAdap
 pub use capability::{negotiate, Capability, HostPolicy, NegotiationResult};
 pub use host::{FixedDetector, HostEnvironment, HostEnvironmentDetector, HostEvent, HostSyscall};
 pub use instruction::{InstructionCategory, InstructionKey, UniversalEvent, UniversalInstruction};
+pub use log_channel::{HostLogChannelDescriptor, HostLogChannelKind};
+pub use real_exec::{
+    execute_controlled_syscall, RealSyscallAudit, RealSyscallMode, RealSyscallPolicy,
+    RealSyscallRequest, RealSyscallResult,
+};
 pub use registry::AdapterRegistry;

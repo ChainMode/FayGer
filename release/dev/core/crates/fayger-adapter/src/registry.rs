@@ -4,11 +4,12 @@
 //! 进入可服务状态，并在选中时基于宿主可用能力与策略算出 `granted`。派发时对每条指令
 //! 做能力检查与支持判定。
 
-use crate::adapter::PlatformAdapter;
+use crate::adapter::{AdapterDescriptor, PlatformAdapter};
 use crate::capability::{Capability, HostPolicy};
 use crate::host::{HostEnvironment, HostSyscall};
 use crate::instruction::UniversalInstruction;
 use fayger_error::{ContextValue, ErrorCode, FaygerError, Layer};
+use fayger_observability::{BoundedHostLogForwarder, EventBus, HostLogSink, SubscriptionId};
 use std::collections::BTreeSet;
 
 /// 适配器注册表。
@@ -79,6 +80,32 @@ impl AdapterRegistry {
     #[must_use]
     pub const fn granted(&self) -> &BTreeSet<Capability> {
         &self.granted
+    }
+
+    /// 返回当前已选中适配器的描述符副本（未进入可服务状态时为 `None`）。
+    #[must_use]
+    pub fn selected_descriptor(&self) -> Option<AdapterDescriptor> {
+        self.selected.map(|idx| self.adapters[idx].descriptor())
+    }
+
+    /// 按当前已选中适配器自描述的 `log_channel` 把宿主日志转发器挂载到 `bus`。
+    ///
+    /// 若未选中适配器或选中适配器的通道为 `HostLogChannelKind::None`，不注册任何订阅并返回 `None`。
+    pub fn attach_host_log_channel(
+        &self,
+        bus: &mut EventBus,
+        sink: Box<dyn HostLogSink>,
+        max_buffered_records: usize,
+        auto_flush: bool,
+    ) -> Option<(SubscriptionId, BoundedHostLogForwarder)> {
+        let descriptor = self.selected_descriptor()?;
+        descriptor.log_channel.attach_to_bus(
+            &descriptor.platform_id,
+            bus,
+            sink,
+            max_buffered_records,
+            auto_flush,
+        )
     }
 
     /// 校验一组 BuF 必需能力是否被授予。

@@ -260,15 +260,19 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fayger-adapter"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "fayger-error",
+ "fayger-observability",
  "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "fayger-bridge"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "fayger-adapter",
  "fayger-buf",
@@ -280,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "fayger-buf"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "binrw",
  "ciborium",
@@ -293,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "fayger-cap"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "ed25519-dalek",
  "fayger-error",
@@ -305,8 +309,9 @@ dependencies = [
 
 [[package]]
 name = "fayger-cli"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
+ "ed25519-dalek",
  "fayger-adapter",
  "fayger-bridge",
  "fayger-buf",
@@ -317,19 +322,21 @@ dependencies = [
  "fayger-observability",
  "fayger-runtime",
  "proptest",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "fayger-error"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "fayger-faymanifest"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "fayger-buf",
  "fayger-error",
@@ -339,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "fayger-loader"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "crc32fast",
  "ed25519-dalek",
@@ -351,15 +358,17 @@ dependencies = [
 
 [[package]]
 name = "fayger-observability"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "fayger-error",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "fayger-runtime"
-version = "0.1.0-rc.1"
+version = "0.2.0-rc.1"
 dependencies = [
  "fayger-buf",
  "fayger-error",

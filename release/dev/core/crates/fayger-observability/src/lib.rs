@@ -35,9 +35,14 @@
 #![doc(html_root_url = "https://docs.rs/fayger-observability/0.0.0")]
 
 pub mod bus;
+pub mod channel;
 pub mod event;
 pub mod filter;
 
 pub use bus::{EventBus, SubscriptionId};
+pub use channel::{
+    default_severity_mapper, BoundedHostLogForwarder, HostLogRecord, HostLogSink, HostLogStats,
+    MemoryHostLogSink, SeverityMapper, WriterHostLogSink, HOST_LOG_SCHEMA_VERSION,
+};
 pub use event::{EventCategory, EventDraft, EventLevel, EventPayload, FaygerEvent, PhaseStatus};
 pub use filter::EventFilter;

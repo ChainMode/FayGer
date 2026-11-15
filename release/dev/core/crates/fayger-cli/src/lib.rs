@@ -19,13 +19,15 @@
 //! assert!(text.contains("Terminated"));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/fayger-cli/0.1.0-rc.1")]
+#![doc(html_root_url = "https://docs.rs/fayger-cli/0.2.0-rc.1")]
 
 pub mod args;
 pub mod commands;
+pub mod ego_package;
 pub mod error;
 pub mod fs_ops;
 pub mod host_profile;
+pub mod live_ifay;
 
 pub use args::{parse_args, usage_text, Command, PackSpec};
 pub use commands::{
@@ -33,8 +35,17 @@ pub use commands::{
     evaluate_manifest_command, inspect_object, pack_bytes, render_bridge_report, run_object,
     RunReport,
 };
+pub use ego_package::{
+    jcs_canonicalize, sign_ego_manifest_value, verify_and_mount_ego_package, EgoIntegrity,
+    EgoSignature, FidelityGatePolicy, FidelityReport, VerifiedEgoMount, EGO_SIGNING_DOMAIN,
+};
 pub use error::{exit_code_of, CliError, ExitCode};
 pub use host_profile::{detect_host_environment, info_text};
+pub use live_ifay::{
+    demo_live_ifay_command, execute_live_ifay, verify_audit_chain, AuditChainBuilder,
+    HashChainedAuditEntry, LiveIfayInputs, LiveIfayOutcome, TaskProgram, TaskStep,
+    LIVE_IFAY_AUDIT_SCHEMA_VERSION, TASK_IR_SCHEMA_VERSION,
+};
 
 use std::io::Write;
 
@@ -55,6 +66,7 @@ pub fn run_cli(args: &[String], out: &mut dyn Write) -> Result<(), CliError> {
 }
 
 /// 按已解析命令执行。FS 读写在此与纯核心拼接。
+#[allow(clippy::too_many_lines)]
 fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
     match command {
         Command::Help { topic } => {
@@ -131,6 +143,37 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
             let text = demo_drone_command()?;
             writeln_out(out, &text)
         }
+        Command::DemoLiveIfay => {
+            let text = demo_live_ifay_command()?;
+            write_out(out, &text)
+        }
+        Command::RunLive {
+            manifest,
+            request,
+            anchors,
+            ego_package,
+            ego_pubkey,
+            buf,
+            workspace,
+            ticket,
+        } => {
+            let faymanifest_json = read_utf8_file(manifest, "FayManifest")?;
+            let cap_request_json = read_utf8_file(request, "CAP request")?;
+            let trust_anchors_json = read_utf8_file(anchors, "CAP trust anchors")?;
+            let buf_bytes = fs_ops::read_file(buf)?;
+            let outcome = execute_live_ifay(&LiveIfayInputs {
+                faymanifest_json: &faymanifest_json,
+                cap_request_json: &cap_request_json,
+                trust_anchors_json: &trust_anchors_json,
+                ego_package_dir: std::path::Path::new(ego_package),
+                ego_public_key_hex: ego_pubkey,
+                buf_bytes: &buf_bytes,
+                workspace_root: std::path::Path::new(workspace),
+                audit_approval_ticket: ticket,
+                fidelity_policy: &FidelityGatePolicy::production_default(),
+            })?;
+            write_out(out, &outcome.render()?)
+        }
         Command::Pack {
             entry,
             sections,
@@ -154,6 +197,15 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
             )
         }
     }
+}
+
+/// 读取 UTF-8 文本文件（在薄壳边界上转换编码错误）。
+fn read_utf8_file(path: &str, label: &str) -> Result<String, CliError> {
+    let bytes = fs_ops::read_file(path)?;
+    String::from_utf8(bytes).map_err(|err| CliError::Io {
+        path: path.to_owned(),
+        detail: format!("{label} is not valid UTF-8: {err}"),
+    })
 }
 
 /// 写出文本（不追加换行；调用方文本通常已含尾随换行）。

@@ -13,6 +13,7 @@ use crate::host::{HostEnvironment, HostEvent, HostSyscall};
 use crate::instruction::{
     InstructionCategory, InstructionKey, UniversalEvent, UniversalInstruction,
 };
+use crate::log_channel::{HostLogChannelDescriptor, HostLogChannelKind};
 use fayger_error::FaygerError;
 use std::collections::BTreeSet;
 
@@ -120,6 +121,7 @@ impl NativeDesktopAdapter {
                 platform_id: "native-desktop".into(),
                 supported_capabilities,
                 supported_instructions,
+                log_channel: HostLogChannelDescriptor::new(HostLogChannelKind::OsLogger),
             },
             match_os_kinds: vec!["linux".into(), "macos".into(), "windows".into()],
             match_sandboxes: vec!["none".into()],
@@ -166,6 +168,7 @@ impl ServerAdapter {
                 platform_id: "server".into(),
                 supported_capabilities,
                 supported_instructions,
+                log_channel: HostLogChannelDescriptor::new(HostLogChannelKind::SystemdJournal),
             },
             match_os_kinds: vec![],
             match_sandboxes: vec![],
@@ -212,6 +215,7 @@ impl BrowserAdapter {
                 platform_id: "browser".into(),
                 supported_capabilities,
                 supported_instructions,
+                log_channel: HostLogChannelDescriptor::new(HostLogChannelKind::BrowserConsole),
             },
             match_os_kinds: vec!["browser".into()],
             match_sandboxes: vec!["browser".into()],
@@ -247,6 +251,7 @@ impl InAppAdapter {
                 platform_id: "inapp".into(),
                 supported_capabilities: injected,
                 supported_instructions,
+                log_channel: HostLogChannelDescriptor::new(HostLogChannelKind::InAppSdkChannel),
             },
             match_os_kinds: vec!["inapp".into()],
             match_sandboxes: vec!["inapp".into()],

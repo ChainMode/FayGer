@@ -6,6 +6,7 @@
 
 use crate::host::{HostEnvironment, HostEvent, HostSyscall};
 use crate::instruction::{InstructionCategory, UniversalEvent, UniversalInstruction};
+use crate::log_channel::HostLogChannelDescriptor;
 use crate::Capability;
 use fayger_error::{ContextValue, ErrorCode, FaygerError, Layer};
 use std::collections::BTreeSet;
@@ -19,6 +20,8 @@ pub struct AdapterDescriptor {
     pub supported_capabilities: BTreeSet<Capability>,
     /// 该适配器支持翻译的指令种类集合。
     pub supported_instructions: BTreeSet<crate::instruction::InstructionKey>,
+    /// 该适配器自描述的宿主日志 / 追踪通道映射规则。
+    pub log_channel: HostLogChannelDescriptor,
 }
 
 /// Platform_Adapter 契约。
@@ -103,6 +106,7 @@ mod tests {
             platform_id: "test".into(),
             supported_capabilities: BTreeSet::new(),
             supported_instructions: keys.iter().copied().collect(),
+            log_channel: crate::log_channel::HostLogChannelDescriptor::none(),
         }
     }
 

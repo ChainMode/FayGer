@@ -56,6 +56,27 @@ pub enum Command {
     Demo,
     /// Run the complete local drone telemetry MVP demonstration.
     DemoDrone,
+    /// Run the end-to-end authenticated live iFay controlled workspace slice.
+    DemoLiveIfay,
+    /// Run an authenticated live iFay controlled execution bundle from explicit files.
+    RunLive {
+        /// FayManifest JSON path.
+        manifest: String,
+        /// Production CAP EvaluationRequest JSON path.
+        request: String,
+        /// CAP trust anchors JSON path.
+        anchors: String,
+        /// Signed Ego_Package directory path.
+        ego_package: String,
+        /// Trusted Ego Ed25519 subkey public key hex.
+        ego_pubkey: String,
+        /// Sealed task BuF path.
+        buf: String,
+        /// Controlled sandbox workspace directory path.
+        workspace: String,
+        /// Audit approval ticket string.
+        ticket: String,
+    },
     /// 打印用法帮助。
     Help {
         /// 可选的子命令主题。
@@ -94,6 +115,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
         "demo" => match args.get(1).map(String::as_str) {
             None => Ok(Command::Demo),
             Some("drone") if args.len() == 2 => Ok(Command::DemoDrone),
+            Some("live-ifay") if args.len() == 2 => Ok(Command::DemoLiveIfay),
             Some(other) => Err(CliError::Usage(format!("unknown demo scenario: {other}"))),
         },
         "inspect" => {
@@ -113,6 +135,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
             Ok(Command::Assemble { path })
         }
         "evaluate" => parse_evaluate(&args[1..]),
+        "run-live" => parse_run_live(&args[1..]),
         "pack" => parse_pack(&args[1..]),
         other => Err(CliError::Usage(format!("unknown command: {other}"))),
     }
@@ -160,6 +183,68 @@ fn parse_evaluate(rest: &[String]) -> Result<Command, CliError> {
         })?,
         operation: operation.ok_or_else(|| {
             CliError::Usage("evaluate requires --operation <operation-id>".to_owned())
+        })?,
+    })
+}
+
+/// Parses named inputs for `fayger run-live`.
+#[allow(clippy::too_many_lines)]
+fn parse_run_live(rest: &[String]) -> Result<Command, CliError> {
+    let mut manifest = None;
+    let mut request = None;
+    let mut anchors = None;
+    let mut ego_package = None;
+    let mut ego_pubkey = None;
+    let mut buf = None;
+    let mut workspace = None;
+    let mut ticket = None;
+    let mut i = 0;
+
+    while i < rest.len() {
+        let (slot, usage) = match rest[i].as_str() {
+            "--manifest" => (&mut manifest, "--manifest <faymanifest.json>"),
+            "--request" => (&mut request, "--request <cap-request.json>"),
+            "--anchors" => (&mut anchors, "--anchors <trust-anchors.json>"),
+            "--ego-package" => (&mut ego_package, "--ego-package <dir>"),
+            "--ego-pubkey" => (&mut ego_pubkey, "--ego-pubkey <hex64>"),
+            "--buf" => (&mut buf, "--buf <task.buf>"),
+            "--workspace" => (&mut workspace, "--workspace <dir>"),
+            "--ticket" => (&mut ticket, "--ticket <approval-ticket>"),
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected run-live argument: {other}"
+                )));
+            }
+        };
+        if slot.is_some() {
+            return Err(CliError::Usage(format!(
+                "duplicate run-live argument: {}",
+                rest[i]
+            )));
+        }
+        *slot = Some(next_value(rest, i, usage)?);
+        i += 2;
+    }
+
+    Ok(Command::RunLive {
+        manifest: manifest.ok_or_else(|| {
+            CliError::Usage("run-live requires --manifest <faymanifest.json>".to_owned())
+        })?,
+        request: request.ok_or_else(|| {
+            CliError::Usage("run-live requires --request <cap-request.json>".to_owned())
+        })?,
+        anchors: anchors.ok_or_else(|| {
+            CliError::Usage("run-live requires --anchors <trust-anchors.json>".to_owned())
+        })?,
+        ego_package: ego_package
+            .ok_or_else(|| CliError::Usage("run-live requires --ego-package <dir>".to_owned()))?,
+        ego_pubkey: ego_pubkey
+            .ok_or_else(|| CliError::Usage("run-live requires --ego-pubkey <hex64>".to_owned()))?,
+        buf: buf.ok_or_else(|| CliError::Usage("run-live requires --buf <task.buf>".to_owned()))?,
+        workspace: workspace
+            .ok_or_else(|| CliError::Usage("run-live requires --workspace <dir>".to_owned()))?,
+        ticket: ticket.ok_or_else(|| {
+            CliError::Usage("run-live requires --ticket <approval-ticket>".to_owned())
         })?,
     })
 }
@@ -274,9 +359,10 @@ pub fn usage_text(topic: Option<&str>) -> String {
             "fayger assemble <faymanifest.json>\n    解析并装配一个 FayManifest（草案）：校验 schema、自动补充基础设施、判定解析阶段并报告依赖。注册表后端为 H1 占位（stub）。".to_owned()
         }
         Some("evaluate") => "fayger evaluate --manifest <faymanifest.json> --driver <driver.json> --resource <resource-id> --operation <operation-id>\n    以本地演示策略评估一个 CAP 操作，输出人类摘要与机器可读审计记录；不是生产 Faying 授权。".to_owned(),
+        Some("run-live") => "fayger run-live --manifest <faymanifest.json> --request <cap-request.json> --anchors <trust-anchors.json> --ego-package <dir> --ego-pubkey <hex64> --buf <task.buf> --workspace <dir> --ticket <approval-ticket>\n    在生产级 CAP 门控、已签名 Ego_Package 双层验签与受控工作区约束下运行活体 iFay 任务并输出防篡改哈希链审计。".to_owned(),
         Some("pack") => "fayger pack --entry <name> --section <id>:<kind>=<path> [...] -o <out>\n    把若干 section 文件封装为一个可加载的 BuF。kind ∈ {code,data,asset}。".to_owned(),
         Some("info") => "fayger info\n    探测宿主环境并打印选中的适配器与授予能力。".to_owned(),
-        Some("demo") => "fayger demo [drone]\n    无参数时运行 BuF 安装自检；drone 运行完整的本地无人机遥测 MVP。".to_owned(),
+        Some("demo") => "fayger demo [drone|live-ifay]\n    无参数时运行 BuF 安装自检；drone 运行无人机模拟演示；live-ifay 运行受控活体 iFay 端到端闭环。".to_owned(),
         Some("version") => "fayger version\n    打印运行基座版本与 Runtime_Interface 版本。".to_owned(),
         _ => TOP_LEVEL_USAGE.to_owned(),
     }
@@ -295,9 +381,10 @@ fayger - Fay 多平台虚拟运行环境（运行基座）
     inspect <file.buf>   加载并校验一个 BuF，打印 Manifest 摘要
     assemble <file.json> 解析并装配一个 FayManifest（草案），打印依赖解析报告
     evaluate ...         评估一个本地 CAP 演示操作并输出审计记录
+    run-live ...         运行生产级 CAP + 已签名 Ego_Package 的受控活体 iFay 任务
     pack ...             把若干 section 文件封装为一个可加载的 BuF
     info                 探测宿主环境并打印选中的适配器与授予能力
-    demo [drone]         运行安装自检或完整无人机遥测 MVP
+    demo [drone|live-ifay] 运行安装自检、无人机模拟或受控活体 iFay 闭环
     version              打印版本信息
     help [命令]          打印用法帮助
 

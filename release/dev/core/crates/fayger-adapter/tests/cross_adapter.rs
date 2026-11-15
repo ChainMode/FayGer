@@ -53,11 +53,13 @@ fn twin_descriptors() -> (AdapterDescriptor, AdapterDescriptor) {
         platform_id: "twin-a".into(),
         supported_capabilities: supported_capabilities.clone(),
         supported_instructions: supported_instructions.clone(),
+        log_channel: fayger_adapter::HostLogChannelDescriptor::none(),
     };
     let b = AdapterDescriptor {
         platform_id: "twin-b".into(),
         supported_capabilities,
         supported_instructions,
+        log_channel: fayger_adapter::HostLogChannelDescriptor::none(),
     };
     (a, b)
 }

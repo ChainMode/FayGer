@@ -44,15 +44,26 @@ fn drone_demo_runs_the_vertical_slice_with_one_command() {
     assert!(text.contains("simulated_success"));
     assert!(text.contains("\"telemetry_status\": \"nominal\""));
     assert!(text.contains("\"production_verified\": false"));
-    assert!(text.contains("\"fayger_version\": \"0.1.0-rc.1\""));
+    assert!(text.contains("\"fayger_version\": \"0.2.0-rc.1\""));
     assert!(text.contains("\"release_channel\": \"prerelease\""));
+}
+
+#[test]
+fn live_ifay_demo_runs_authenticated_slice_with_one_command() {
+    let (r, text) = run(&["demo", "live-ifay"]);
+    assert!(r.is_ok(), "live-ifay demo should succeed: {r:?}");
+    assert!(text.contains("workspace-guardian-ifay"));
+    assert!(text.contains("production_verified: true"));
+    assert!(text.contains("AllowControlledExecution"));
+    assert!(text.contains("\"audit_chain_verified\": true"));
+    assert!(text.contains("\"fayger_version\": \"0.2.0-rc.1\""));
 }
 
 #[test]
 fn version_reports_versions() {
     let (r, text) = run(&["version"]);
     assert!(r.is_ok());
-    assert!(text.contains("fayger 0.1.0-rc.1"));
+    assert!(text.contains("fayger 0.2.0-rc.1"));
     assert!(text.contains("runtime-interface 1.0.0"));
 }
 
