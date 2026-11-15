@@ -6,8 +6,8 @@ members = ["crates/fayger-error", "crates/fayger-buf", "crates/fayger-loader", "
 version = "0.3.0-rc.1"
 edition = "2021"
 rust-version = "1.83"
-license = "Apache-2.0 OR MIT"
-repository = "https://github.com/jah-guo/fayger"
+license = "MIT"
+repository = "https://github.com/ChainMode/FayGer"
 description = "Fayger 第一阶段开发实现 - 多平台 Fay 虚拟运行环境"
 
 [workspace.dependencies]

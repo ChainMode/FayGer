@@ -7,6 +7,10 @@
 !/.github/
 !/README.md
 !/LICENSE
+!/LICENSE-DOCS
+!/SECURITY.md
+!/CONTRIBUTING.md
+!/CODE_OF_CONDUCT.md
 !/.gitignore
 
 # 忽略所有子目录下的 macOS 元数据文件
