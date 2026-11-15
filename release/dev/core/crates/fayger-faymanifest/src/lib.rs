@@ -51,8 +51,16 @@ pub use constraint::VersionConstraint;
 pub use model::{
     ControlMode, DriverRef, EgoConfig, FayManifest, ModuleRef, PermissionsConfig, ProtocolRef,
 };
-pub use namespace::{Namespace, PackageId};
-pub use registry::{InMemoryRegistry, Registry, ResolutionOutcome, StubRegistry};
+pub use namespace::{
+    Namespace, PackageId, SCOPE_CAP_DRIVERS, SCOPE_DRONE_DRIVERS, SCOPE_EGO_MODELS, SCOPE_IFAY,
+};
+pub use registry::{
+    sign_registry_index_value, InMemoryRegistry, PackageGovernance, Registry,
+    RegistryIndexSignature, RegistrySourceMode, RegistryTrustAnchor, RegistryTrustStore,
+    ResolutionOutcome, StaticIndexRegistry, StaticPackageEntry, StaticPackageRelease,
+    StaticRegistryIndex, StubRegistry, REGISTRY_INDEX_SCHEMA_VERSION,
+    REGISTRY_INDEX_SIGNING_DOMAIN,
+};
 pub use resolve::{
     resolve, AssemblyReport, ComponentOrigin, DependencyKind, DependencyResolution,
     DependencyStatus, PhaseGap,

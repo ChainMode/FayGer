@@ -15,6 +15,10 @@
 
 use fayger_error::{ContextValue, ErrorCode, FaygerError, Layer};
 
+/// 官方核心命名空间作用域（不含前导 `@`）。
+pub const SCOPE_IFAY: &str = "ifay";
+/// CAP 驱动包命名空间作用域（不含前导 `@`）。
+pub const SCOPE_CAP_DRIVERS: &str = "cap-drivers";
 /// 蓝图约定的驱动包命名空间作用域（不含前导 `@`）。
 pub const SCOPE_DRONE_DRIVERS: &str = "drone-drivers";
 /// 蓝图约定的 Ego 模型命名空间作用域（不含前导 `@`）。
@@ -22,15 +26,19 @@ pub const SCOPE_EGO_MODELS: &str = "ego-models";
 
 /// 已识别的命名空间分类。
 ///
-/// 标记为 `#[non_exhaustive]`：注册表正式设计（H2）会追加更多受治理的命名空间。
+/// 标记为 `#[non_exhaustive]`：后续演进可追加更多受治理的命名空间。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Namespace {
-    /// `@drone-drivers/...`：驱动包。
+    /// `@ifay/...`：官方核心组件与 SDK 包。
+    Ifay,
+    /// `@cap-drivers/...`：通用 CAP 驱动包。
+    CapDrivers,
+    /// `@drone-drivers/...`：无人机驱动包。
     DroneDrivers,
     /// `@ego-models/...`：Ego 模型。
     EgoModels,
-    /// 其它作用域：草案阶段允许，但标注为「未受治理（ungoverned）」。
+    /// 其它作用域：若未在注册表绑定组织/代表身份则标注为「未受治理（ungoverned）」。
     Other(String),
 }
 
@@ -39,22 +47,29 @@ impl Namespace {
     #[must_use]
     pub fn classify(scope: &str) -> Self {
         match scope {
+            SCOPE_IFAY => Self::Ifay,
+            SCOPE_CAP_DRIVERS => Self::CapDrivers,
             SCOPE_DRONE_DRIVERS => Self::DroneDrivers,
             SCOPE_EGO_MODELS => Self::EgoModels,
             other => Self::Other(other.to_owned()),
         }
     }
 
-    /// 该命名空间是否属于蓝图明确治理的命名空间（H1 草案：仅上述两个）。
+    /// 该命名空间是否属于核心受治理命名空间（`@ifay`、`@cap-drivers`、`@drone-drivers`、`@ego-models`）。
     #[must_use]
     pub const fn is_governed(&self) -> bool {
-        matches!(self, Self::DroneDrivers | Self::EgoModels)
+        matches!(
+            self,
+            Self::Ifay | Self::CapDrivers | Self::DroneDrivers | Self::EgoModels
+        )
     }
 
     /// 作用域字符串（不含 `@`）。
     #[must_use]
     pub fn scope(&self) -> &str {
         match self {
+            Self::Ifay => SCOPE_IFAY,
+            Self::CapDrivers => SCOPE_CAP_DRIVERS,
             Self::DroneDrivers => SCOPE_DRONE_DRIVERS,
             Self::EgoModels => SCOPE_EGO_MODELS,
             Self::Other(s) => s,
@@ -226,5 +241,18 @@ mod tests {
     #[test]
     fn allows_dots_and_underscores_in_name_middle() {
         assert!(PackageId::parse("@scope/a.b_c-d").is_ok());
+    }
+
+    #[test]
+    fn recognizes_ifay_and_cap_drivers_as_governed() {
+        let sdk = PackageId::parse("@ifay/sdk").expect("valid");
+        assert_eq!(sdk.namespace(), Namespace::Ifay);
+        assert!(sdk.namespace().is_governed());
+        assert_eq!(sdk.namespace().scope(), "ifay");
+
+        let cap = PackageId::parse("@cap-drivers/generic-gpio").expect("valid");
+        assert_eq!(cap.namespace(), Namespace::CapDrivers);
+        assert!(cap.namespace().is_governed());
+        assert_eq!(cap.namespace().scope(), "cap-drivers");
     }
 }

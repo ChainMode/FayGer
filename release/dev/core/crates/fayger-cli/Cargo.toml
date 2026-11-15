@@ -28,6 +28,7 @@ fayger-observability = { path = "../fayger-observability" }
 fayger-bridge = { path = "../fayger-bridge" }
 fayger-faymanifest = { path = "../fayger-faymanifest" }
 fayger-cap = { path = "../fayger-cap" }
+fayger-conformance = { path = "../fayger-conformance" }
 ed25519-dalek = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

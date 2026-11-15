@@ -44,7 +44,7 @@ fn drone_demo_runs_the_vertical_slice_with_one_command() {
     assert!(text.contains("simulated_success"));
     assert!(text.contains("\"telemetry_status\": \"nominal\""));
     assert!(text.contains("\"production_verified\": false"));
-    assert!(text.contains("\"fayger_version\": \"0.2.0-rc.1\""));
+    assert!(text.contains("\"fayger_version\": \"0.3.0-rc.1\""));
     assert!(text.contains("\"release_channel\": \"prerelease\""));
 }
 
@@ -56,14 +56,14 @@ fn live_ifay_demo_runs_authenticated_slice_with_one_command() {
     assert!(text.contains("production_verified: true"));
     assert!(text.contains("AllowControlledExecution"));
     assert!(text.contains("\"audit_chain_verified\": true"));
-    assert!(text.contains("\"fayger_version\": \"0.2.0-rc.1\""));
+    assert!(text.contains("\"fayger_version\": \"0.3.0-rc.1\""));
 }
 
 #[test]
 fn version_reports_versions() {
     let (r, text) = run(&["version"]);
     assert!(r.is_ok());
-    assert!(text.contains("fayger 0.2.0-rc.1"));
+    assert!(text.contains("fayger 0.3.0-rc.1"));
     assert!(text.contains("runtime-interface 1.0.0"));
 }
 
@@ -151,4 +151,78 @@ fn evaluate_drone_telemetry_emits_auditable_demo_record() {
     assert!(text.contains("\"telemetry_status\": \"nominal\""));
     assert!(text.contains("\"production_verified\": false"));
     assert!(text.contains("CAP-D-1"));
+}
+
+#[test]
+fn conformance_cli_e2e_verifies_reference_runtime() {
+    let (r, text) = run(&["conformance"]);
+    assert!(r.is_ok(), "conformance should succeed: {r:?}");
+    assert_eq!(exit_code_of(&r), ExitCode::Success);
+    assert!(text.contains("Fayger Runtime_Interface Conformance Report"));
+    assert!(text.contains("CONFORMANT"));
+    assert!(text.contains("7/7 required properties passed"));
+}
+
+#[test]
+fn assemble_with_signed_static_registry_and_offline_cache() {
+    use ed25519_dalek::SigningKey;
+    use fayger_cli::assemble_manifest_with_registry;
+    use fayger_faymanifest::{sign_registry_index_value, REGISTRY_INDEX_SCHEMA_VERSION};
+    use serde_json::json;
+
+    use std::fmt::Write as _;
+    let sk = SigningKey::from_bytes(&[19u8; 32]);
+    let pk_hex =
+        sk.verifying_key()
+            .as_bytes()
+            .iter()
+            .fold(String::with_capacity(64), |mut acc, b| {
+                let _ = write!(acc, "{b:02x}");
+                acc
+            });
+    let anchors_json = serde_json::to_string(&json!({
+        "anchors": [{
+            "key_id": "reg-root-1",
+            "signer_fay_id": "org_ifay_registry",
+            "public_key_hex": pk_hex,
+            "trusted_index_signer": true
+        }]
+    }))
+    .expect("anchors");
+    let digest = "b".repeat(64);
+    let mut index_val = json!({
+        "schema_version": REGISTRY_INDEX_SCHEMA_VERSION,
+        "generated_at": "2026-11-16T00:00:00Z",
+        "modules": {"sensor": ["1.2.0"], "fayid": ["1.0.0"]},
+        "protocols": {"cap_protocol": ["1.0.0"], "faying_protocol": ["1.1.0"]},
+        "packages": {
+            "@cap-drivers/gpio": {
+                "releases": [{"version": "1.0.0", "artifact_sha256": digest}],
+                "signer_fay_id": "org_ifay_drivers",
+                "provenance_verified": true
+            }
+        }
+    });
+    sign_registry_index_value(&mut index_val, "reg-root-1", "org_ifay_registry", &sk)
+        .expect("sign");
+    let index_json = serde_json::to_string(&index_val).expect("index json");
+    let manifest_json = r#"{
+        "name": "iot-ifay", "version": "1.0.0", "description": "d", "vendor": "v",
+        "modules": [{"id": "sensor", "version": "^1.0.0"}],
+        "protocols": [{"id": "cap_protocol"}],
+        "controlMode": "command",
+        "drivers": [{"name": "gpio", "type": "device", "driverPackage": "@cap-drivers/gpio"}]
+    }"#;
+
+    let online_text =
+        assemble_manifest_with_registry(manifest_json, Some(&index_json), None, &anchors_json)
+            .expect("online assemble");
+    assert!(online_text.contains("online_verified"));
+    assert!(online_text.contains("[core-governed]"));
+    assert!(online_text.contains("resolved -> 1.2.0"));
+
+    let cached_text =
+        assemble_manifest_with_registry(manifest_json, None, Some(&index_json), &anchors_json)
+            .expect("cached assemble");
+    assert!(cached_text.contains("cached_verified (offline degraded)"));
 }

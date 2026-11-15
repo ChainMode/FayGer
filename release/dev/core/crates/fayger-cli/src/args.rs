@@ -31,6 +31,17 @@ pub enum Command {
     Assemble {
         /// FayManifest JSON 文件路径。
         path: String,
+        /// 可选的静态已签名注册表在线索引 JSON 文件路径。
+        registry_index: Option<String>,
+        /// 可选的离线已验签缓存索引 JSON 文件路径。
+        offline_cache: Option<String>,
+        /// 注册表信任锚 JSON 文件路径（配合 `--registry-index` 或 `--offline-cache`）。
+        trust_anchors: Option<String>,
+    },
+    /// 运行 `Runtime_Interface` 语言无关黑盒一致性测试套件并输出合规报告。
+    Conformance {
+        /// 是否以格式化 JSON 输出报告。
+        json: bool,
     },
     /// Evaluate one CAP operation against a FayManifest and driver manifest.
     Evaluate {
@@ -130,14 +141,68 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
             let path = require_positional(args, "bridge <file>")?;
             Ok(Command::Bridge { path })
         }
-        "assemble" => {
-            let path = require_positional(args, "assemble <file>")?;
-            Ok(Command::Assemble { path })
-        }
+        "assemble" => parse_assemble(&args[1..]),
+        "conformance" => parse_conformance(&args[1..]),
         "evaluate" => parse_evaluate(&args[1..]),
         "run-live" => parse_run_live(&args[1..]),
         "pack" => parse_pack(&args[1..]),
         other => Err(CliError::Usage(format!("unknown command: {other}"))),
+    }
+}
+
+/// 解析 `assemble <file.json> [--registry-index <idx.json>] [--offline-cache <cache.json>] [--trust-anchors <anchors.json>]`。
+fn parse_assemble(rest: &[String]) -> Result<Command, CliError> {
+    let Some(path) = rest.first().filter(|s| !s.starts_with('-')).cloned() else {
+        return Err(CliError::Usage(
+            "missing argument: assemble <file>".to_owned(),
+        ));
+    };
+    let mut registry_index = None;
+    let mut offline_cache = None;
+    let mut trust_anchors = None;
+    let mut i = 1;
+    while i < rest.len() {
+        let (slot, usage) = match rest[i].as_str() {
+            "--registry-index" => (&mut registry_index, "--registry-index <index.json>"),
+            "--offline-cache" => (&mut offline_cache, "--offline-cache <cache.json>"),
+            "--trust-anchors" => (&mut trust_anchors, "--trust-anchors <anchors.json>"),
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected assemble argument: {other}"
+                )));
+            }
+        };
+        if slot.is_some() {
+            return Err(CliError::Usage(format!(
+                "duplicate assemble argument: {}",
+                rest[i]
+            )));
+        }
+        *slot = Some(next_value(rest, i, usage)?);
+        i += 2;
+    }
+    if (registry_index.is_some() || offline_cache.is_some()) && trust_anchors.is_none() {
+        return Err(CliError::Usage(
+            "assemble with --registry-index or --offline-cache requires --trust-anchors <anchors.json>"
+                .to_owned(),
+        ));
+    }
+    Ok(Command::Assemble {
+        path,
+        registry_index,
+        offline_cache,
+        trust_anchors,
+    })
+}
+
+/// 解析 `conformance [--json]`。
+fn parse_conformance(rest: &[String]) -> Result<Command, CliError> {
+    match rest {
+        [] => Ok(Command::Conformance { json: false }),
+        [flag] if flag == "--json" => Ok(Command::Conformance { json: true }),
+        [other, ..] => Err(CliError::Usage(format!(
+            "unexpected conformance argument: {other}"
+        ))),
     }
 }
 
@@ -356,7 +421,10 @@ pub fn usage_text(topic: Option<&str>) -> String {
             "fayger inspect <file.buf>\n    加载并校验一个 BuF，打印 Manifest 摘要。".to_owned()
         }
         Some("assemble") => {
-            "fayger assemble <faymanifest.json>\n    解析并装配一个 FayManifest（草案）：校验 schema、自动补充基础设施、判定解析阶段并报告依赖。注册表后端为 H1 占位（stub）。".to_owned()
+            "fayger assemble <faymanifest.json> [--registry-index <index.json>] [--offline-cache <cache.json>] [--trust-anchors <anchors.json>]\n    解析并装配一个 FayManifest：校验 schema、自动补充基础设施、判定解析阶段，并按静态已签名注册表索引（或离线缓存/占位）解析依赖。".to_owned()
+        }
+        Some("conformance") => {
+            "fayger conformance [--json]\n    运行 Runtime_Interface 语言无关黑盒一致性测试套件并输出合规报告。".to_owned()
         }
         Some("evaluate") => "fayger evaluate --manifest <faymanifest.json> --driver <driver.json> --resource <resource-id> --operation <operation-id>\n    以本地演示策略评估一个 CAP 操作，输出人类摘要与机器可读审计记录；不是生产 Faying 授权。".to_owned(),
         Some("run-live") => "fayger run-live --manifest <faymanifest.json> --request <cap-request.json> --anchors <trust-anchors.json> --ego-package <dir> --ego-pubkey <hex64> --buf <task.buf> --workspace <dir> --ticket <approval-ticket>\n    在生产级 CAP 门控、已签名 Ego_Package 双层验签与受控工作区约束下运行活体 iFay 任务并输出防篡改哈希链审计。".to_owned(),
@@ -379,7 +447,8 @@ fayger - Fay 多平台虚拟运行环境（运行基座）
     run <file.buf>       加载并运行一个 BuF
     bridge <file.buf>    加载并经适配层在当前宿主上运行一个 BuF（打印 HostSyscall）
     inspect <file.buf>   加载并校验一个 BuF，打印 Manifest 摘要
-    assemble <file.json> 解析并装配一个 FayManifest（草案），打印依赖解析报告
+    assemble <file.json> 解析并装配一个 FayManifest（支持已签名注册表索引与离线缓存）
+    conformance [--json] 运行 Runtime_Interface 语言无关黑盒一致性测试套件
     evaluate ...         评估一个本地 CAP 演示操作并输出审计记录
     run-live ...         运行生产级 CAP + 已签名 Ego_Package 的受控活体 iFay 任务
     pack ...             把若干 section 文件封装为一个可加载的 BuF
@@ -481,11 +550,56 @@ mod tests {
         assert_eq!(
             parse_args(&argv(&["assemble", "m.json"])).expect("ok"),
             Command::Assemble {
-                path: "m.json".to_owned()
+                path: "m.json".to_owned(),
+                registry_index: None,
+                offline_cache: None,
+                trust_anchors: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&argv(&[
+                "assemble",
+                "m.json",
+                "--registry-index",
+                "idx.json",
+                "--trust-anchors",
+                "anchors.json"
+            ]))
+            .expect("ok"),
+            Command::Assemble {
+                path: "m.json".to_owned(),
+                registry_index: Some("idx.json".to_owned()),
+                offline_cache: None,
+                trust_anchors: Some("anchors.json".to_owned()),
             }
         );
         assert!(matches!(
             parse_args(&argv(&["assemble"])),
+            Err(CliError::Usage(_))
+        ));
+        assert!(matches!(
+            parse_args(&argv(&[
+                "assemble",
+                "m.json",
+                "--registry-index",
+                "idx.json"
+            ])),
+            Err(CliError::Usage(_))
+        ));
+    }
+
+    #[test]
+    fn conformance_parses_default_and_json_flag() {
+        assert_eq!(
+            parse_args(&argv(&["conformance"])).expect("ok"),
+            Command::Conformance { json: false }
+        );
+        assert_eq!(
+            parse_args(&argv(&["conformance", "--json"])).expect("ok"),
+            Command::Conformance { json: true }
+        );
+        assert!(matches!(
+            parse_args(&argv(&["conformance", "--bogus"])),
             Err(CliError::Usage(_))
         ));
     }

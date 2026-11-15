@@ -77,18 +77,18 @@ impl VersionConstraint {
         Ok(ctor(core))
     }
 
-    /// 判断给定版本是否满足本约束。
+    /// 判断给定版本是否满足本约束（遵循 npm 风格同基版本预发布规则，见 ADR 0005）。
     #[must_use]
     pub fn satisfies(&self, v: &SemVer) -> bool {
         match self {
-            Self::Any => true,
+            Self::Any => v.pre.is_none(),
             Self::Exact(base) => v == base,
-            Self::GreaterEq(base) => v >= base,
-            Self::Greater(base) => v > base,
-            Self::LessEq(base) => v <= base,
-            Self::Less(base) => v < base,
-            Self::Caret(base) => v >= base && v < &caret_upper(base),
-            Self::Tilde(base) => v >= base && v < &tilde_upper(base),
+            Self::GreaterEq(base) => prerelease_allowed(base, v) && v >= base,
+            Self::Greater(base) => prerelease_allowed(base, v) && v > base,
+            Self::LessEq(base) => prerelease_allowed(base, v) && v <= base,
+            Self::Less(base) => prerelease_allowed(base, v) && v < base,
+            Self::Caret(base) => prerelease_allowed(base, v) && v >= base && v < &caret_upper(base),
+            Self::Tilde(base) => prerelease_allowed(base, v) && v >= base && v < &tilde_upper(base),
         }
     }
 
@@ -106,6 +106,14 @@ impl VersionConstraint {
             Self::Less(v) => format!("<{v}"),
         }
     }
+}
+
+/// 仅当候选非预发布，或约束基版本本身带预发布且共享 `(major, minor, patch)` 时允许匹配。
+const fn prerelease_allowed(base: &SemVer, v: &SemVer) -> bool {
+    if v.pre.is_none() {
+        return true;
+    }
+    base.pre.is_some() && base.major == v.major && base.minor == v.minor && base.patch == v.patch
 }
 
 /// `^` 的排他上界：保留最左非零位。
@@ -228,5 +236,25 @@ mod tests {
         assert_eq!(VC::parse("~2.3.4").expect("ok").render(), "~2.3.4");
         assert_eq!(VC::parse(">=1.0.0").expect("ok").render(), ">=1.0.0");
         assert_eq!(VC::parse("*").expect("ok").render(), "*");
+    }
+
+    #[test]
+    fn npm_style_prerelease_gating() {
+        let stable_caret = VC::parse("^1.0.0").expect("ok");
+        assert!(!stable_caret.satisfies(&v("1.0.0-rc.1")));
+        assert!(!stable_caret.satisfies(&v("1.2.0-alpha.1")));
+        assert!(stable_caret.satisfies(&v("1.2.0")));
+
+        let pre_caret = VC::parse("^1.2.0-alpha.1").expect("ok");
+        assert!(pre_caret.satisfies(&v("1.2.0-alpha.1")));
+        assert!(pre_caret.satisfies(&v("1.2.0-alpha.2")));
+        assert!(pre_caret.satisfies(&v("1.2.0")));
+        assert!(pre_caret.satisfies(&v("1.3.0")));
+        assert!(!pre_caret.satisfies(&v("1.3.0-alpha.1")));
+
+        assert!(!VC::Any.satisfies(&v("1.0.0-alpha.1")));
+        assert!(VC::parse("1.0.0-alpha.1")
+            .expect("ok")
+            .satisfies(&v("1.0.0-alpha.1")));
     }
 }

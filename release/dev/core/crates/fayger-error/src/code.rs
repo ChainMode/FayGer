@@ -117,6 +117,12 @@ pub enum ErrorCode {
     /// `FM_INVALID_NAMESPACE`：驱动 `driverPackage` 或 Ego `modelSource` 不是合法的
     /// 命名空间限定包标识（形如 `@scope/name`）。`context` 含 `field` 与原始 `value`。
     FmInvalidNamespace,
+
+    // ----- 装配层 (H2 · 静态已签名组件注册表后端) -----
+    /// `FM_REGISTRY_INVALID_INDEX`：组件注册表静态索引 JSON 结构、版本或条目内容非法。
+    FmRegistryInvalidIndex,
+    /// `FM_REGISTRY_SIGNATURE_FAIL`：组件注册表静态索引缺少签名、未知 `key_id` 或 Ed25519 验签失败。
+    FmRegistrySignatureFail,
 }
 
 impl ErrorCode {
@@ -148,6 +154,8 @@ impl ErrorCode {
             Self::FmValidationFailed => "FM_VALIDATION_FAILED",
             Self::FmInvalidVersionConstraint => "FM_INVALID_VERSION_CONSTRAINT",
             Self::FmInvalidNamespace => "FM_INVALID_NAMESPACE",
+            Self::FmRegistryInvalidIndex => "FM_REGISTRY_INVALID_INDEX",
+            Self::FmRegistrySignatureFail => "FM_REGISTRY_SIGNATURE_FAIL",
         }
     }
 }
@@ -268,6 +276,8 @@ mod tests {
             ErrorCode::FmValidationFailed,
             ErrorCode::FmInvalidVersionConstraint,
             ErrorCode::FmInvalidNamespace,
+            ErrorCode::FmRegistryInvalidIndex,
+            ErrorCode::FmRegistrySignatureFail,
         ] {
             assert_eq!(code.to_string(), code.as_str());
         }

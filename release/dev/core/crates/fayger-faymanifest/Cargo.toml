@@ -20,6 +20,8 @@ fayger-error = { path = "../fayger-error" }
 fayger-buf = { path = "../fayger-buf" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

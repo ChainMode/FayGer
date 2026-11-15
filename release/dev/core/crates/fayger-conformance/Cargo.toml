@@ -1,0 +1,27 @@
+[package]
+name = "fayger-conformance"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fayger Runtime_Interface 黑盒一致性测试套件与跨实现行为等价性校验 (H2 · ADR 0005)"
+
+[lints]
+workspace = true
+
+[lib]
+name = "fayger_conformance"
+path = "src/lib.rs"
+
+[dependencies]
+fayger-error = { path = "../fayger-error" }
+fayger-buf = { path = "../fayger-buf" }
+fayger-loader = { path = "../fayger-loader" }
+fayger-observability = { path = "../fayger-observability" }
+fayger-runtime = { path = "../fayger-runtime" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

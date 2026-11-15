@@ -19,7 +19,7 @@
 //! assert!(text.contains("Terminated"));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/fayger-cli/0.2.0-rc.1")]
+#![doc(html_root_url = "https://docs.rs/fayger-cli/0.3.0-rc.1")]
 
 pub mod args;
 pub mod commands;
@@ -31,9 +31,9 @@ pub mod live_ifay;
 
 pub use args::{parse_args, usage_text, Command, PackSpec};
 pub use commands::{
-    assemble_manifest, bridge_object, default_policy, demo_drone_command, demo_object,
-    evaluate_manifest_command, inspect_object, pack_bytes, render_bridge_report, run_object,
-    RunReport,
+    assemble_manifest, assemble_manifest_with_registry, bridge_object, conformance_command,
+    default_policy, demo_drone_command, demo_object, evaluate_manifest_command, inspect_object,
+    pack_bytes, render_bridge_report, run_object, RunReport,
 };
 pub use ego_package::{
     jcs_canonicalize, sign_ego_manifest_value, verify_and_mount_ego_package, EgoIntegrity,
@@ -102,13 +102,36 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
             let report = bridge_object(obj)?;
             write_out(out, &render_bridge_report(&report))
         }
-        Command::Assemble { path } => {
-            let bytes = fs_ops::read_file(path)?;
-            let json = String::from_utf8(bytes).map_err(|e| CliError::Io {
-                path: path.clone(),
-                detail: format!("FayManifest is not valid UTF-8: {e}"),
-            })?;
-            let text = assemble_manifest(&json)?;
+        Command::Assemble {
+            path,
+            registry_index,
+            offline_cache,
+            trust_anchors,
+        } => {
+            let json = read_utf8_file(path, "FayManifest")?;
+            let text = if let Some(anchors_path) = trust_anchors {
+                let anchors_json = read_utf8_file(anchors_path, "registry trust anchors")?;
+                let online_json = registry_index
+                    .as_deref()
+                    .map(|p| read_utf8_file(p, "registry index"))
+                    .transpose()?;
+                let cached_json = offline_cache
+                    .as_deref()
+                    .map(|p| read_utf8_file(p, "offline cache index"))
+                    .transpose()?;
+                assemble_manifest_with_registry(
+                    &json,
+                    online_json.as_deref(),
+                    cached_json.as_deref(),
+                    &anchors_json,
+                )?
+            } else {
+                assemble_manifest(&json)?
+            };
+            writeln_out(out, &text)
+        }
+        Command::Conformance { json } => {
+            let text = conformance_command(*json)?;
             writeln_out(out, &text)
         }
         Command::Evaluate {
@@ -287,5 +310,17 @@ mod tests {
         let (r, _) = run_to_string(&["inspect", "/no/such/file.buf"]);
         assert!(matches!(r, Err(CliError::Io { .. })));
         assert_eq!(exit_code_of(&r), ExitCode::Failure);
+    }
+
+    #[test]
+    fn conformance_runs_in_text_and_json_modes() {
+        let (r_txt, txt) = run_to_string(&["conformance"]);
+        assert!(r_txt.is_ok());
+        assert!(txt.contains("CONFORMANT"));
+        assert!(txt.contains("7/7 required properties passed"));
+
+        let (r_json, js) = run_to_string(&["conformance", "--json"]);
+        assert!(r_json.is_ok());
+        assert!(js.contains("\"verdict\": \"conformant\""));
     }
 }

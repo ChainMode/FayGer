@@ -14,7 +14,7 @@
 
 use crate::constraint::VersionConstraint;
 use crate::model::{ControlMode, FayManifest};
-use crate::registry::{Registry, ResolutionOutcome};
+use crate::registry::{PackageGovernance, Registry, RegistrySourceMode, ResolutionOutcome};
 use fayger_buf::manifest::SemVer;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -166,8 +166,15 @@ pub enum DependencyStatus {
     },
     /// 注册表确定不存在该项（缺失）。
     Missing,
-    /// 注册表未接入该类查询（H1 占位，真实后端见 H2）。
+    /// 注册表未接入该类查询（H1 占位）。
     Stubbed,
+    /// 因离线且无本地缓存而无法判定（不可判定不等于缺失）。
+    Indeterminate,
+    /// 注册表存在该项，但包来源签名或受治理命名空间校验失败（不可信不等于已解析）。
+    Untrusted {
+        /// 不可信原因说明。
+        reason: String,
+    },
 }
 
 impl DependencyStatus {
@@ -181,6 +188,8 @@ impl DependencyStatus {
             }
             Self::Missing => "MISSING (not in registry)".to_owned(),
             Self::Stubbed => "stubbed (registry not connected; H2)".to_owned(),
+            Self::Indeterminate => "indeterminate (offline; registry unavailable)".to_owned(),
+            Self::Untrusted { reason } => format!("UNTRUSTED ({reason})"),
         }
     }
 }
@@ -198,6 +207,8 @@ pub struct DependencyResolution {
     pub constraint: Option<String>,
     /// 解析状态。
     pub status: DependencyStatus,
+    /// 命名空间包的治理分类（仅驱动包与 Ego 模型为 `Some`）。
+    pub governance: Option<PackageGovernance>,
 }
 
 /// 某 Phase 最小组件集尚未满足的缺口（信息性）。
@@ -240,12 +251,14 @@ pub struct AssemblyReport {
     pub dependencies: Vec<DependencyResolution>,
     /// 阶段最小集缺口。
     pub phase_gaps: Vec<PhaseGap>,
-    /// 注册表是否为占位实现（用于报告抬头）。
+    /// 注册表是否为占位实现（用于兼容 H1 报告抬头）。
     pub registry_is_stub: bool,
+    /// 注册表数据源模式（在线已验证 / 缓存降级 / 离线不可判定 / 内存 / 占位）。
+    pub registry_mode: RegistrySourceMode,
 }
 
 impl AssemblyReport {
-    /// 依赖中是否存在缺失项（注册表确定不存在）。stubbed 不计入缺失。
+    /// 依赖中是否存在缺失项（注册表确定不存在）。stubbed / indeterminate / untrusted 不计入缺失。
     #[must_use]
     pub fn has_missing(&self) -> bool {
         self.dependencies
@@ -259,6 +272,22 @@ impl AssemblyReport {
         self.dependencies
             .iter()
             .any(|d| matches!(d.status, DependencyStatus::Unsatisfiable { .. }))
+    }
+
+    /// 依赖中是否存在来源不可信项（签名或受治理命名空间校验失败）。
+    #[must_use]
+    pub fn has_untrusted(&self) -> bool {
+        self.dependencies
+            .iter()
+            .any(|d| matches!(d.status, DependencyStatus::Untrusted { .. }))
+    }
+
+    /// 依赖中是否存在因离线无缓存而无法判定的项。
+    #[must_use]
+    pub fn has_indeterminate(&self) -> bool {
+        self.dependencies
+            .iter()
+            .any(|d| matches!(d.status, DependencyStatus::Indeterminate))
     }
 
     /// 渲染为可读文本（供 CLI 输出）。
@@ -291,24 +320,25 @@ impl AssemblyReport {
         );
 
         let _ = writeln!(s);
-        let reg = if self.registry_is_stub {
-            "stub (H2 not yet implemented)"
-        } else {
-            "in-memory"
-        };
+        let reg = self.registry_mode.label();
         let _ = writeln!(s, "Dependency resolution (registry: {reg}):");
         for d in &self.dependencies {
             let constraint = d
                 .constraint
                 .as_ref()
                 .map_or_else(String::new, |c| format!(" {c}"));
+            let gov = d
+                .governance
+                .as_ref()
+                .map_or_else(String::new, |g| format!(" [{}]", g.label()));
             let _ = writeln!(
                 s,
-                "  [{:<8}] {:<32} ({}){}  ->  {}",
+                "  [{:<8}] {:<32} ({}){}{}  ->  {}",
                 d.kind.label(),
                 d.identifier,
                 d.origin.label(),
                 constraint,
+                gov,
                 d.status.render()
             );
         }
@@ -364,6 +394,7 @@ fn render_id_line(s: &mut String, label: &str, ids: &[String]) {
 #[must_use]
 pub fn resolve(manifest: &FayManifest, registry: &dyn Registry) -> AssemblyReport {
     let registry_is_stub = registry.is_stub();
+    let registry_mode = registry.source_mode();
     // 声明集合。
     let declared_modules: BTreeSet<String> =
         manifest.modules.iter().map(|m| m.id.clone()).collect();
@@ -407,6 +438,7 @@ pub fn resolve(manifest: &FayManifest, registry: &dyn Registry) -> AssemblyRepor
             origin,
             constraint: constraint.as_ref().map(VersionConstraint::render),
             status: resolve_one(registry.lookup_module(id), constraint.as_ref()),
+            governance: None,
         });
     }
     for id in &effective_protocols {
@@ -418,6 +450,7 @@ pub fn resolve(manifest: &FayManifest, registry: &dyn Registry) -> AssemblyRepor
             origin,
             constraint: constraint.as_ref().map(VersionConstraint::render),
             status: resolve_one(registry.lookup_protocol(id), constraint.as_ref()),
+            governance: None,
         });
     }
     // 驱动包（保持声明顺序，去重）。
@@ -432,6 +465,7 @@ pub fn resolve(manifest: &FayManifest, registry: &dyn Registry) -> AssemblyRepor
             origin: ComponentOrigin::Declared,
             constraint: None,
             status: resolve_one(registry.lookup_package(&d.driver_package), None),
+            governance: Some(registry.package_governance(&d.driver_package)),
         });
     }
     if let Some(ego) = &manifest.ego {
@@ -441,6 +475,7 @@ pub fn resolve(manifest: &FayManifest, registry: &dyn Registry) -> AssemblyRepor
             origin: ComponentOrigin::Declared,
             constraint: None,
             status: resolve_one(registry.lookup_package(&ego.model_source), None),
+            governance: Some(registry.package_governance(&ego.model_source)),
         });
     }
 
@@ -461,6 +496,7 @@ pub fn resolve(manifest: &FayManifest, registry: &dyn Registry) -> AssemblyRepor
         dependencies,
         phase_gaps,
         registry_is_stub,
+        registry_mode,
     }
 }
 
@@ -527,13 +563,16 @@ fn resolve_one(
     match outcome {
         ResolutionOutcome::Stub => DependencyStatus::Stubbed,
         ResolutionOutcome::Unknown => DependencyStatus::Missing,
+        ResolutionOutcome::Indeterminate => DependencyStatus::Indeterminate,
+        ResolutionOutcome::Untrusted { reason } => DependencyStatus::Untrusted { reason },
         ResolutionOutcome::Known(versions) => {
             if versions.is_empty() {
                 return DependencyStatus::Resolved { version: None };
             }
+            let effective = constraint.unwrap_or(&VersionConstraint::Any);
             let best = versions
                 .iter()
-                .filter(|&v| constraint.is_none_or(|c| c.satisfies(v)))
+                .filter(|&v| effective.satisfies(v))
                 .max()
                 .cloned();
             best.map_or(

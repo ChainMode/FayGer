@@ -12,8 +12,11 @@ use fayger_buf::object::{BuFObject, Section};
 use fayger_cap::{
     evaluate_command, AuthorizationEvidence, Decision, DriverManifest, EvaluationRequest,
 };
+use fayger_conformance::{run_conformance_suite, ReferenceRuntimeHarness};
 use fayger_error::{ContextValue, ErrorCode, FaygerError, Layer};
-use fayger_faymanifest::{assemble_str, FayManifest, StubRegistry};
+use fayger_faymanifest::{
+    assemble_str, FayManifest, RegistryTrustStore, StaticIndexRegistry, StubRegistry,
+};
 use fayger_loader::{load, seal, LoadPolicy};
 use fayger_observability::{EventCategory, EventFilter, FaygerEvent};
 use fayger_runtime::{LifecycleState, MockAdapter, Runtime, RuntimeInterface};
@@ -309,15 +312,58 @@ pub fn render_bridge_report(report: &BridgeReport) -> String {
 
 /// 解析并装配一个 FayManifest JSON 文本，返回装配报告文本（纯，不触达 FS）。
 ///
-/// 使用 H1 占位注册表 [`StubRegistry`]（真实注册表后端见 H2）；依赖将被标注为
-/// `stubbed`，但 schema/语义错误会作为失败透出。
+/// 未传入注册表信任锚时默认使用 [`StubRegistry`]（兼容 H1 用法）。
 ///
 /// # Errors
-/// FayManifest 解析（`FM_PARSE_FAIL`）或语义校验（`FM_*`）失败时透出 `FaygerError`
-/// （经 [`CliError::Failure`]）。
+/// FayManifest 解析（`FM_PARSE_FAIL`）或语义校验（`FM_*`）失败时透出 `FaygerError`。
 pub fn assemble_manifest(json: &str) -> Result<String, CliError> {
     let report = assemble_str(json, &StubRegistry)?;
     Ok(report.render())
+}
+
+/// 使用静态已签名注册表索引（支持离线已验签缓存降级）解析并装配一个 FayManifest（纯，不触达 FS）。
+///
+/// # Errors
+/// 信任锚/索引签名校验失败（`FM_REGISTRY_*`）或清单校验失败时透出 `FaygerError`。
+pub fn assemble_manifest_with_registry(
+    json: &str,
+    online_index_json: Option<&str>,
+    cached_index_json: Option<&str>,
+    trust_anchors_json: &str,
+) -> Result<String, CliError> {
+    let trust_store = RegistryTrustStore::from_json_str(trust_anchors_json)?;
+    let registry = StaticIndexRegistry::from_online_or_cache(
+        online_index_json,
+        cached_index_json,
+        &trust_store,
+    )?;
+    let report = assemble_str(json, &registry)?;
+    Ok(report.render())
+}
+
+/// 运行 `Runtime_Interface` 黑盒一致性测试套件并返回可读或 JSON 报告。
+///
+/// # Errors
+/// 若被测运行层未通过必选性质，返回 `CliError::Failure` 以表达非零退出码。
+pub fn conformance_command(json_output: bool) -> Result<String, CliError> {
+    let report = run_conformance_suite(ReferenceRuntimeHarness::new);
+    if !report.is_conformant() {
+        return Err(CliError::Failure(FaygerError::new(
+            ErrorCode::RtImplMissingMethods,
+            Layer::Runtime,
+            "runtime implementation failed conformance suite",
+        )));
+    }
+    if json_output {
+        report.to_json_pretty().map_err(|e| {
+            CliError::Failure(
+                command_validation("ConformanceSerializationFailed", "conformance_report")
+                    .with_context("detail", ContextValue::string(e.to_string())),
+            )
+        })
+    } else {
+        Ok(report.render())
+    }
 }
 
 /// Evaluates a FayManifest operation against a CAP driver manifest.
