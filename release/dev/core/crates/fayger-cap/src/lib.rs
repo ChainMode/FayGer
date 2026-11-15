@@ -19,10 +19,20 @@ use std::collections::HashSet;
 use std::fmt;
 
 mod evaluation;
+mod production;
 
 pub use evaluation::{
     evaluate_command, AuthorizationAudit, AuthorizationEvidence, AuthorizationSource, Decision,
     EvaluationRecord, EvaluationRequest, EvidenceStatus, EVALUATION_SCHEMA_VERSION,
+};
+pub use production::{
+    canonical_json, compute_params_sha256, evaluate_production_command, CapErrorCode, CapGrant,
+    ConfirmationAuditSummary, ConsequenceIrreversibility, DomainCategory, FayingGrade,
+    G0SafeStateAction, G0SafeStateDirective, GrantMinGrade, HumanConfirmationProof,
+    MandateBindingModel, ProductionAuditRecord, ProductionDisposition, ProductionEvaluationRequest,
+    ProductionMandateEvidence, ProductionOperationDescriptor, ProductionResourceDescriptor,
+    ProductionSafeStateDescriptor, RealExecutionGateConfig, SignedDriverManifest, TrustAnchorStore,
+    PRODUCTION_EVALUATION_SCHEMA_VERSION,
 };
 
 /// CAP resource identifier as exposed by a driver manifest.

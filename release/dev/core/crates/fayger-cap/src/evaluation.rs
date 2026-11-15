@@ -59,6 +59,8 @@ impl EvaluationRequest {
 pub enum AuthorizationSource {
     /// Deterministic, local-only fixture used by the MVP demonstration.
     DemoFixture,
+    /// Production Faying mandate bound and verified under CAP 1.0 D-1..D-7 rules.
+    ProductionFayingMandate,
 }
 
 /// Local evidence status. This is deliberately not a CAP/Faying wire type.

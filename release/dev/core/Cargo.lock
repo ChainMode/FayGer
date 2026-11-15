@@ -295,9 +295,12 @@ dependencies = [
 name = "fayger-cap"
 version = "0.1.0-rc.1"
 dependencies = [
+ "ed25519-dalek",
  "fayger-error",
+ "proptest",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
