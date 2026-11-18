@@ -1,0 +1,135 @@
+{
+  "version": "0.2.0",
+  "created_at": "2026-11-18T05:00:55Z",
+  "base_model": "qwen3.5-0.8B",
+  "editions": [
+    "lite",
+    "normal",
+    "plus"
+  ],
+  "training_backend": "stub",
+  "grid": {
+    "lite": {
+      "kernel": {
+        "path": "adapters/kernel.safetensors"
+      },
+      "zones": {
+        "coding": [
+          {
+            "level": 1,
+            "path": "adapters/coding/L1.safetensors"
+          }
+        ],
+        "knowledge": [
+          {
+            "level": 1,
+            "path": "adapters/knowledge/L1.safetensors"
+          }
+        ]
+      }
+    },
+    "normal": {
+      "kernel": {
+        "path": "adapters/kernel.safetensors"
+      },
+      "zones": {
+        "coding": [
+          {
+            "level": 1,
+            "path": "adapters/coding/L1.safetensors"
+          },
+          {
+            "level": 2,
+            "path": "adapters/coding/L2.safetensors"
+          }
+        ],
+        "knowledge": [
+          {
+            "level": 1,
+            "path": "adapters/knowledge/L1.safetensors"
+          },
+          {
+            "level": 2,
+            "path": "adapters/knowledge/L2.safetensors"
+          }
+        ]
+      }
+    },
+    "plus": {
+      "kernel": {
+        "path": "adapters/kernel.safetensors"
+      },
+      "zones": {
+        "coding": [
+          {
+            "level": 1,
+            "path": "adapters/coding/L1.safetensors"
+          },
+          {
+            "level": 2,
+            "path": "adapters/coding/L2.safetensors"
+          },
+          {
+            "level": 3,
+            "path": "adapters/coding/L3.safetensors"
+          }
+        ],
+        "knowledge": [
+          {
+            "level": 1,
+            "path": "adapters/knowledge/L1.safetensors"
+          },
+          {
+            "level": 2,
+            "path": "adapters/knowledge/L2.safetensors"
+          },
+          {
+            "level": 3,
+            "path": "adapters/knowledge/L3.safetensors"
+          }
+        ]
+      }
+    }
+  },
+  "fidelity_report": {
+    "schema_version": "1.0",
+    "status": "measured",
+    "holdout_sample_count": 3,
+    "holdout_loss": 2.5,
+    "holdout_perplexity": 12.182494,
+    "cell_consistency_score": 0.86,
+    "probe_win_rate": null,
+    "drift_from_baseline": null
+  },
+  "integrity": {
+    "schema_version": "1.0",
+    "base_model_digest": "unverified_offline",
+    "cell_digests": {
+      "lite/adapters/coding/L1.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "lite/adapters/kernel.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "lite/adapters/knowledge/L1.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "normal/adapters/coding/L1.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "normal/adapters/coding/L2.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "normal/adapters/kernel.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "normal/adapters/knowledge/L1.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "normal/adapters/knowledge/L2.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/coding/L1.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/coding/L2.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/coding/L3.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/kernel.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/knowledge/L1.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/knowledge/L2.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284",
+      "plus/adapters/knowledge/L3.safetensors": "sha256:922e77ed5a705917fca0526c2d383a5d043314ab04d3d333015fae82c3cb6284"
+    }
+  },
+  "signature": {
+    "schema_version": "1.0",
+    "alg": "Ed25519",
+    "domain": "ifay.ego.package-signing.v1",
+    "signer_fay_id": "ifay_interopfixtureaaaaa",
+    "key_id": "ifay_interopfixtureaaaaa#ego-sign-1",
+    "public_key_hex": "b0c521c656429c785c69731c8e3ca33182da45e631a8568d8fdbdfbf3c180013",
+    "payload_jcs_sha256": "2af9d251282b3724123def7ea2cbccb5f4a347d1994551bb18e89c58bab26373",
+    "sig_hex": "4ccc2242edc7b540e18a72f36e715cfb2cf3e20f9ecf79a26cce937ee88b5d6187cc293ae12cea657426d95b723f6210d4d7c6b42d27f724f6cfc3f7b9a89a0d"
+  }
+}

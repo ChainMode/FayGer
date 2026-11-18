@@ -1,0 +1,6 @@
+{
+  "base_model": "qwen3.5-4B",
+  "quantization": "4bit",
+  "lora_rank": 32,
+  "lora_alpha": 64
+}
