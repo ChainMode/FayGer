@@ -47,12 +47,12 @@ echo "==> Installed fayger to ${DEST}"
 # PATH 提示。
 case ":${PATH}:" in
   *":${INSTALL_BIN_DIR}:"*)
-    echo "==> ${INSTALL_BIN_DIR} is already on your PATH. Run: fayger version"
+    echo "==> ${INSTALL_BIN_DIR} is already on your PATH. Run: fayger up  (then open http://127.0.0.1:7979)"
     ;;
   *)
     echo ""
     echo "==> Add fayger to your PATH by appending this line to your shell profile:"
     echo "      export PATH=\"${INSTALL_BIN_DIR}:\$PATH\""
-    echo "    (e.g. ~/.bashrc, ~/.zshrc) then restart your shell."
+    echo "    (e.g. ~/.bashrc, ~/.zshrc) then restart your shell and run: fayger up"
     ;;
 esac

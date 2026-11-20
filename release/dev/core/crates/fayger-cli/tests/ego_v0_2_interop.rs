@@ -53,14 +53,25 @@ fn copy_dir(src: &Path, dst: &Path) {
 #[test]
 fn ego_v0_2_multi_edition_package_verifies_fully_and_per_edition() {
     let pkg = fixture_root().join("stub-measured");
-    let (fay, key) = (read_trimmed("signer_fay_id.txt"), read_trimmed("trusted_pubkey.hex"));
+    let (fay, key) = (
+        read_trimmed("signer_fay_id.txt"),
+        read_trimmed("trusted_pubkey.hex"),
+    );
     let policy = FidelityGatePolicy::permissive_offline();
 
     let all = verify_and_mount_ego_package(&pkg, &fay, &key, &[], &policy).expect("full mount");
-    assert_eq!(all.mounted_cells.len(), 15, "lite 3 + normal 5 + plus 7 cells");
+    assert_eq!(
+        all.mounted_cells.len(),
+        15,
+        "lite 3 + normal 5 + plus 7 cells"
+    );
 
     let plus = plus_cells(&pkg);
-    assert_eq!(plus.len(), 7, "plus edition carries Kernel + L1..L3 in two zones");
+    assert_eq!(
+        plus.len(),
+        7,
+        "plus edition carries Kernel + L1..L3 in two zones"
+    );
     let sub = verify_and_mount_ego_package(&pkg, &fay, &key, &plus, &policy).expect("plus mount");
     assert_eq!(sub.mounted_cells.len(), 7);
 }
@@ -68,7 +79,10 @@ fn ego_v0_2_multi_edition_package_verifies_fully_and_per_edition() {
 #[test]
 fn stub_package_without_consistency_score_is_rejected_by_production_policy() {
     let pkg = fixture_root().join("stub-measured");
-    let (fay, key) = (read_trimmed("signer_fay_id.txt"), read_trimmed("trusted_pubkey.hex"));
+    let (fay, key) = (
+        read_trimmed("signer_fay_id.txt"),
+        read_trimmed("trusted_pubkey.hex"),
+    );
     let err = verify_and_mount_ego_package(
         &pkg,
         &fay,
@@ -77,14 +91,20 @@ fn stub_package_without_consistency_score_is_rejected_by_production_policy() {
         &FidelityGatePolicy::production_default(),
     )
     .expect_err("stub package must not pass production gate");
-    assert!(format!("{err:?}").contains("MissingCellConsistencyScore"), "{err:?}");
+    assert!(
+        format!("{err:?}").contains("MissingCellConsistencyScore"),
+        "{err:?}"
+    );
 }
 
 #[test]
 fn package_with_measured_consistency_passes_production_policy() {
     // gate-ready fidelity numbers are synthetic; this checks the contract, not model quality.
     let pkg = fixture_root().join("gate-ready");
-    let (fay, key) = (read_trimmed("signer_fay_id.txt"), read_trimmed("trusted_pubkey.hex"));
+    let (fay, key) = (
+        read_trimmed("signer_fay_id.txt"),
+        read_trimmed("trusted_pubkey.hex"),
+    );
     let mount = verify_and_mount_ego_package(
         &pkg,
         &fay,
@@ -99,7 +119,10 @@ fn package_with_measured_consistency_passes_production_policy() {
 #[test]
 fn wrong_key_and_tampered_deep_cell_are_rejected() {
     let src = fixture_root().join("stub-measured");
-    let (fay, key) = (read_trimmed("signer_fay_id.txt"), read_trimmed("trusted_pubkey.hex"));
+    let (fay, key) = (
+        read_trimmed("signer_fay_id.txt"),
+        read_trimmed("trusted_pubkey.hex"),
+    );
     let policy = FidelityGatePolicy::permissive_offline();
 
     assert!(verify_and_mount_ego_package(&src, &fay, &"00".repeat(32), &[], &policy).is_err());

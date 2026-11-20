@@ -1,10 +1,24 @@
 # Fayger Core (Rust 实现)
 
-Fayger 第一阶段开发的主参考实现，作为 Cargo workspace 组织。
+Fayger 核心参考实现（Cargo workspace），提供类似 Docker Desktop / Engine 的三位一体交付：**后台守护引擎（`faygerd`）+ 命令行（`fayger` CLI）+ 内嵌离线可视化控制台（`FayGer Dashboard`）**。
 
-当前本地预发布候选版：`0.1.0-rc.1`。它提供可审计的无人机遥测模拟，明确不包含
-生产 Faying 授权或真实硬件控制。完整发布说明见 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，
-PO 验收步骤见 [`docs/PRERELEASE_ACCEPTANCE.md`](docs/PRERELEASE_ACCEPTANCE.md)。
+当前工作区版本：`0.3.0-rc.1`。完整发布说明见 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，PO 验收步骤见 [`docs/PRERELEASE_ACCEPTANCE.md`](docs/PRERELEASE_ACCEPTANCE.md)。
+
+## 30 秒快速体验（`fayger up` + Web 控制台）
+
+在 `release/dev/core/` 目录下执行一条命令启动后台引擎与内嵌控制台：
+
+```bash
+cargo run -p fayger-cli -- up
+```
+
+浏览器打开 `http://127.0.0.1:7979` 即可体验五大核心能力（100% 离线可用，若本地 `:7980` 运行了 `Ego` 三合一服务将自动挂载在线推理）：
+
+1. **设备环境与资源池（Overview & Device Profile）**：查看 `fayger-device-profile/1.0` JSON，管理设备所有人授予 `FayGer` 的宿主资源池（`fs.read`、`fs.write`、`process.exec`、`net.http`、`media.camera`、`media.mic`）。
+2. **身份与凭据保险箱（FayID Wallet & Auth Exchange）**：创建助记词根身份（`Human ID` 明文永不外泄）、签发防关联动态码 `dync_...`、派生 `iFay` / `coFay`（含 `RoleCharter` `1.0`），并将传统 API Key 封存兑换为限时 `Authorization Grant`。
+3. **分身实例与上岗监护（Running Fays & G0 Emergency Brake）**：一键创建或加载多个 `.buf` 分身，实时配置并查看两层授权链交集（`BuF ∩ HostPool ∩ PerFayPolicy`），拨动显式 **`Faying` 上岗开关** 或点击 **红色 `G0` 一键急刹按钮（立即退回 `Rogue Fay` 停机隔离态）**。
+4. **`ICP` 富交互对话与 `CAP` 宿主守门审批**：基于 `icp.ctx/1.0` 渲染富交互卡片与终端自适应降级预览，常规沙箱读写留痕放行，高风险操作（`process.exec`、`media.camera`）弹出 `CAP Approval Card` 待 `Human Prime` 审批。
+5. **双 `Fay` 心灵感应协作间（Telepathy `TP`）**：在个人 `iFay` 与公共岗位 `coFay` 间建立授权共享认知空间，无损同步结构化状态并写入防篡改 SHA-256 哈希链审计日志。
 
 ## Crates
 
@@ -31,14 +45,20 @@ M9 起，工作区提供一个可安装的运行基座可执行程序 `fayger`�
 # 构建
 cargo build --release -p fayger-cli --bin fayger
 
-# 运行
-./target/release/fayger version     # 版本信息
-./target/release/fayger demo        # 内存示例 BuF 运行自检（类似 docker run hello-world）
-./target/release/fayger demo drone  # 一条命令运行无人机遥测 MVP
-./target/release/fayger info        # 探测宿主、选中适配器、列出授予能力
-./target/release/fayger inspect app.buf   # 查看 BuF 元数据
-./target/release/fayger run app.buf       # 运行一个 BuF
-./target/release/fayger bridge app.buf    # 经真实适配层在当前宿主上运行（打印 HostSyscall）
+# 运行三位一体底座与灵魂工具链
+./target/release/fayger up                  # 启动 faygerd + FayGer Dashboard (http://127.0.0.1:7979)
+./target/release/fayger profile --json      # 输出设备运行时环境描述文件 (fayger-device-profile/1.0)
+./target/release/fayger wallet init         # 初始化本地 FayID 与 Auth Exchange 保险箱
+./target/release/fayger soul create --kind ifay --name alice --out alice.buf  # 一键生成可运行 iFay .buf
+./target/release/fayger soul create --kind cofay --name chair --out chair.buf # 一键生成可运行 coFay .buf
+./target/release/fayger version             # 版本信息
+./target/release/fayger demo                # 内存示例 BuF 运行自检（类似 docker run hello-world）
+./target/release/fayger demo drone          # 一条命令运行无人机遥测 MVP
+./target/release/fayger demo live-ifay      # 一条命令运行生产级 CAP + 已签名 Ego_Package 活体闭环
+./target/release/fayger info                # 探测宿主、选中适配器、列出授予能力
+./target/release/fayger inspect alice.buf   # 查看 BuF 元数据
+./target/release/fayger run alice.buf       # 运行一个 BuF
+./target/release/fayger bridge alice.buf    # 经真实适配层在当前宿主上运行（打印 HostSyscall）
 ./target/release/fayger pack --entry main --section code:code=main.bin -o app.buf  # 封装 BuF
 ```
 

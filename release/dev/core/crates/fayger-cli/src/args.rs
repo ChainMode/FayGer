@@ -88,10 +88,130 @@ pub enum Command {
         /// Audit approval ticket string.
         ticket: String,
     },
+    /// 输出标准化设备运行时环境描述文件（`fayger-device-profile/1.0`）。
+    Profile {
+        /// 是否以 JSON 输出。
+        json: bool,
+        /// 可选状态目录（读取已配置的宿主资源池）。
+        state_dir: Option<String>,
+    },
+    /// 内置 `FayID` 身份与 `Auth Exchange` 凭据保险箱操作。
+    Wallet {
+        /// 子动作。
+        subcommand: WalletSubcommand,
+    },
+    /// 一键构建并密封可运行的 `.buf` `iFay` 数字灵魂或 `coFay` 公共席位包。
+    SoulCreate {
+        /// `ifay` 或 `cofay`。
+        kind: String,
+        /// 灵魂/席位显示名称。
+        name: String,
+        /// 输出 `.buf` 路径。
+        out: String,
+        /// 可选逗号分隔的请求能力列表。
+        capabilities: Option<Vec<String>>,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否以 JSON 输出回执。
+        json: bool,
+    },
+    /// 启动 `faygerd` 守护引擎与内嵌 `FayGer Dashboard` Web 控制台（支持别名 `serve`）。
+    Up {
+        /// 监听地址（默认 `127.0.0.1:7979`）。
+        addr: String,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+    },
+    /// 在命令行中与已挂载 `Fay` 进行 `ICP`（`.ctx`）对话并展示终端文本降级结果。
+    Chat {
+        /// 目标 `fay_id`。
+        fay_id: String,
+        /// 对话消息或快捷宿主指令（如 `/read`、`/write`）。
+        message: String,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否直接输出原始 `.ctx` JSON。
+        json: bool,
+    },
     /// 打印用法帮助。
     Help {
         /// 可选的子命令主题。
         topic: Option<String>,
+    },
+}
+
+/// `fayger wallet` 子命令。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WalletSubcommand {
+    /// 初始化本地 `FayID` 助记词与根身份保险箱。
+    Init {
+        /// 钱包标签。
+        label: String,
+        /// 可选显式助记词短语。
+        seed_phrase: Option<String>,
+        /// 是否强制覆盖已存在的保险箱。
+        force: bool,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否输出 JSON。
+        json: bool,
+    },
+    /// 查看对外脱敏的保险箱摘要（绝不回显明文 `Human ID` 或原始凭据）。
+    Show {
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否输出 JSON。
+        json: bool,
+    },
+    /// 派生个人 `iFay` 身份（`ifay_...`）。
+    DeriveIfay {
+        /// 名称。
+        name: String,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否输出 JSON。
+        json: bool,
+    },
+    /// 派生公共席位 `coFay` 身份（`cofay_...` + `RoleCharter` 1.0）。
+    DeriveCofay {
+        /// 席位名称。
+        name: String,
+        /// 公开岗位头衔。
+        role: Option<String>,
+        /// 职权范围说明。
+        scope: Option<String>,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否输出 JSON。
+        json: bool,
+    },
+    /// 签发防关联动态码（`dync_...`）。
+    DynamicCode {
+        /// 用途说明。
+        purpose: String,
+        /// 有效期秒数。
+        ttl_secs: u64,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否输出 JSON。
+        json: bool,
+    },
+    /// 封存传统 API Key / Token 并兑换限时 `Authorization Grant`。
+    ExchangeGrant {
+        /// 服务商标识。
+        provider: String,
+        /// 原始凭据密钥。
+        secret: String,
+        /// 可选绑定 `fay_id`。
+        fay_id: Option<String>,
+        /// 作用域列表。
+        scopes: Vec<String>,
+        /// 有效期秒数。
+        ttl_secs: u64,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+        /// 是否输出 JSON。
+        json: bool,
     },
 }
 
@@ -146,6 +266,11 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
         "evaluate" => parse_evaluate(&args[1..]),
         "run-live" => parse_run_live(&args[1..]),
         "pack" => parse_pack(&args[1..]),
+        "profile" => parse_profile(&args[1..]),
+        "wallet" => parse_wallet(&args[1..]),
+        "soul" => parse_soul(&args[1..]),
+        "up" | "serve" => parse_up(&args[1..]),
+        "chat" => parse_chat(&args[1..]),
         other => Err(CliError::Usage(format!("unknown command: {other}"))),
     }
 }
@@ -409,10 +534,475 @@ fn parse_pack_spec(spec: &str) -> Result<PackSpec, CliError> {
     })
 }
 
+/// 解析 `profile [--json] [--state-dir <dir>]`。
+fn parse_profile(rest: &[String]) -> Result<Command, CliError> {
+    let mut json = false;
+    let mut state_dir = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            "--state-dir" => {
+                state_dir = Some(next_value(rest, i, "--state-dir <dir>")?);
+                i += 2;
+            }
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected profile argument: {other}"
+                )));
+            }
+        }
+    }
+    Ok(Command::Profile { json, state_dir })
+}
+
+/// 解析 `wallet <init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant> ...`。
+#[allow(clippy::too_many_lines)]
+fn parse_wallet(rest: &[String]) -> Result<Command, CliError> {
+    let Some(sub) = rest.first().map(String::as_str) else {
+        return Err(CliError::Usage(
+            "wallet requires subcommand: init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant"
+                .to_owned(),
+        ));
+    };
+    let tail = &rest[1..];
+    match sub {
+        "init" => {
+            let mut label = "Primary Human Vault".to_owned();
+            let mut seed_phrase = None;
+            let mut force = false;
+            let mut state_dir = None;
+            let mut json = false;
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--name" | "--label" => {
+                        label = next_value(tail, i, "--name <label>")?;
+                        i += 2;
+                    }
+                    "--seed-phrase" => {
+                        seed_phrase = Some(next_value(tail, i, "--seed-phrase <phrase>")?);
+                        i += 2;
+                    }
+                    "--force" => {
+                        force = true;
+                        i += 1;
+                    }
+                    "--state-dir" => {
+                        state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                        i += 2;
+                    }
+                    "--json" => {
+                        json = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "unexpected wallet init argument: {other}"
+                        )));
+                    }
+                }
+            }
+            Ok(Command::Wallet {
+                subcommand: WalletSubcommand::Init {
+                    label,
+                    seed_phrase,
+                    force,
+                    state_dir,
+                    json,
+                },
+            })
+        }
+        "show" => {
+            let mut state_dir = None;
+            let mut json = false;
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--state-dir" => {
+                        state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                        i += 2;
+                    }
+                    "--json" => {
+                        json = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "unexpected wallet show argument: {other}"
+                        )));
+                    }
+                }
+            }
+            Ok(Command::Wallet {
+                subcommand: WalletSubcommand::Show { state_dir, json },
+            })
+        }
+        "derive-ifay" => {
+            let mut name = None;
+            let mut state_dir = None;
+            let mut json = false;
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--name" => {
+                        name = Some(next_value(tail, i, "--name <name>")?);
+                        i += 2;
+                    }
+                    "--state-dir" => {
+                        state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                        i += 2;
+                    }
+                    "--json" => {
+                        json = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "unexpected wallet derive-ifay argument: {other}"
+                        )));
+                    }
+                }
+            }
+            Ok(Command::Wallet {
+                subcommand: WalletSubcommand::DeriveIfay {
+                    name: name.ok_or_else(|| {
+                        CliError::Usage("wallet derive-ifay requires --name <name>".to_owned())
+                    })?,
+                    state_dir,
+                    json,
+                },
+            })
+        }
+        "derive-cofay" => {
+            let mut name = None;
+            let mut role = None;
+            let mut scope = None;
+            let mut state_dir = None;
+            let mut json = false;
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--name" => {
+                        name = Some(next_value(tail, i, "--name <name>")?);
+                        i += 2;
+                    }
+                    "--role" => {
+                        role = Some(next_value(tail, i, "--role <role-title>")?);
+                        i += 2;
+                    }
+                    "--scope" => {
+                        scope = Some(next_value(tail, i, "--scope <scope>")?);
+                        i += 2;
+                    }
+                    "--state-dir" => {
+                        state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                        i += 2;
+                    }
+                    "--json" => {
+                        json = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "unexpected wallet derive-cofay argument: {other}"
+                        )));
+                    }
+                }
+            }
+            Ok(Command::Wallet {
+                subcommand: WalletSubcommand::DeriveCofay {
+                    name: name.ok_or_else(|| {
+                        CliError::Usage("wallet derive-cofay requires --name <name>".to_owned())
+                    })?,
+                    role,
+                    scope,
+                    state_dir,
+                    json,
+                },
+            })
+        }
+        "dynamic-code" => {
+            let mut purpose = "verify_with_fayid".to_owned();
+            let mut ttl_secs = 300u64;
+            let mut state_dir = None;
+            let mut json = false;
+            let mut i = 0;
+            while i < tail.len() {
+                match tail[i].as_str() {
+                    "--purpose" => {
+                        purpose = next_value(tail, i, "--purpose <purpose>")?;
+                        i += 2;
+                    }
+                    "--ttl-secs" => {
+                        let raw = next_value(tail, i, "--ttl-secs <secs>")?;
+                        ttl_secs = raw.parse::<u64>().map_err(|_| {
+                            CliError::Usage(format!("invalid --ttl-secs integer: {raw}"))
+                        })?;
+                        i += 2;
+                    }
+                    "--state-dir" => {
+                        state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                        i += 2;
+                    }
+                    "--json" => {
+                        json = true;
+                        i += 1;
+                    }
+                    other => {
+                        return Err(CliError::Usage(format!(
+                            "unexpected wallet dynamic-code argument: {other}"
+                        )));
+                    }
+                }
+            }
+            Ok(Command::Wallet {
+                subcommand: WalletSubcommand::DynamicCode {
+                    purpose,
+                    ttl_secs,
+                    state_dir,
+                    json,
+                },
+            })
+        }
+        "exchange-grant" => parse_wallet_exchange(tail),
+        other => Err(CliError::Usage(format!(
+            "unknown wallet subcommand: {other}"
+        ))),
+    }
+}
+
+fn parse_wallet_exchange(tail: &[String]) -> Result<Command, CliError> {
+    let mut provider = None;
+    let mut secret = None;
+    let mut fay_id = None;
+    let mut scopes: Vec<String> = Vec::new();
+    let mut ttl_secs = 3600u64;
+    let mut state_dir = None;
+    let mut json = false;
+    let mut i = 0;
+    while i < tail.len() {
+        match tail[i].as_str() {
+            "--provider" => {
+                provider = Some(next_value(tail, i, "--provider <provider>")?);
+                i += 2;
+            }
+            "--secret" => {
+                secret = Some(next_value(tail, i, "--secret <legacy-secret>")?);
+                i += 2;
+            }
+            "--fay-id" => {
+                fay_id = Some(next_value(tail, i, "--fay-id <fay-id>")?);
+                i += 2;
+            }
+            "--scopes" => {
+                let raw = next_value(tail, i, "--scopes <csv>")?;
+                scopes = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                i += 2;
+            }
+            "--ttl-secs" => {
+                let raw = next_value(tail, i, "--ttl-secs <secs>")?;
+                ttl_secs = raw
+                    .parse::<u64>()
+                    .map_err(|_| CliError::Usage(format!("invalid --ttl-secs integer: {raw}")))?;
+                i += 2;
+            }
+            "--state-dir" => {
+                state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                i += 2;
+            }
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected wallet exchange-grant argument: {other}"
+                )));
+            }
+        }
+    }
+    Ok(Command::Wallet {
+        subcommand: WalletSubcommand::ExchangeGrant {
+            provider: provider.ok_or_else(|| {
+                CliError::Usage("wallet exchange-grant requires --provider <provider>".to_owned())
+            })?,
+            secret: secret.ok_or_else(|| {
+                CliError::Usage("wallet exchange-grant requires --secret <secret>".to_owned())
+            })?,
+            fay_id,
+            scopes,
+            ttl_secs,
+            state_dir,
+            json,
+        },
+    })
+}
+
+/// 解析 `soul create --kind ifay|cofay --name <name> --out <path.buf> [--capabilities <csv>] [--state-dir <dir>] [--json]`。
+fn parse_soul(rest: &[String]) -> Result<Command, CliError> {
+    match rest.first().map(String::as_str) {
+        Some("create") => {}
+        Some(other) => {
+            return Err(CliError::Usage(format!(
+                "unknown soul subcommand: {other} (expected 'create')"
+            )));
+        }
+        None => {
+            return Err(CliError::Usage(
+                "soul requires subcommand: soul create --kind ifay|cofay --name <name> --out <path.buf>"
+                    .to_owned(),
+            ));
+        }
+    }
+    let tail = &rest[1..];
+    let mut kind = None;
+    let mut name = None;
+    let mut out = None;
+    let mut capabilities = None;
+    let mut state_dir = None;
+    let mut json = false;
+    let mut i = 0;
+    while i < tail.len() {
+        match tail[i].as_str() {
+            "--kind" => {
+                let k = next_value(tail, i, "--kind ifay|cofay")?;
+                if k != "ifay" && k != "cofay" {
+                    return Err(CliError::Usage(format!(
+                        "invalid --kind '{k}' (expected 'ifay' or 'cofay')"
+                    )));
+                }
+                kind = Some(k);
+                i += 2;
+            }
+            "--name" => {
+                name = Some(next_value(tail, i, "--name <name>")?);
+                i += 2;
+            }
+            "--out" | "-o" => {
+                out = Some(next_value(tail, i, "--out <path.buf>")?);
+                i += 2;
+            }
+            "--capabilities" => {
+                let raw = next_value(tail, i, "--capabilities <csv>")?;
+                let parsed: Vec<String> = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                capabilities = Some(parsed);
+                i += 2;
+            }
+            "--state-dir" => {
+                state_dir = Some(next_value(tail, i, "--state-dir <dir>")?);
+                i += 2;
+            }
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected soul create argument: {other}"
+                )));
+            }
+        }
+    }
+    Ok(Command::SoulCreate {
+        kind: kind
+            .ok_or_else(|| CliError::Usage("soul create requires --kind ifay|cofay".to_owned()))?,
+        name: name
+            .ok_or_else(|| CliError::Usage("soul create requires --name <name>".to_owned()))?,
+        out: out
+            .ok_or_else(|| CliError::Usage("soul create requires --out <path.buf>".to_owned()))?,
+        capabilities,
+        state_dir,
+        json,
+    })
+}
+
+/// 解析 `up [--addr 127.0.0.1:7979] [--state-dir <dir>]`。
+fn parse_up(rest: &[String]) -> Result<Command, CliError> {
+    let mut addr = "127.0.0.1:7979".to_owned();
+    let mut state_dir = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--addr" => {
+                addr = next_value(rest, i, "--addr <host:port>")?;
+                i += 2;
+            }
+            "--state-dir" => {
+                state_dir = Some(next_value(rest, i, "--state-dir <dir>")?);
+                i += 2;
+            }
+            other => {
+                return Err(CliError::Usage(format!("unexpected up argument: {other}")));
+            }
+        }
+    }
+    Ok(Command::Up { addr, state_dir })
+}
+
+/// 解析 `chat --fay <fay_id> --message <text> [--state-dir <dir>] [--json]`。
+fn parse_chat(rest: &[String]) -> Result<Command, CliError> {
+    let mut fay_id = None;
+    let mut message = None;
+    let mut state_dir = None;
+    let mut json = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--fay" => {
+                fay_id = Some(next_value(rest, i, "--fay <fay_id>")?);
+                i += 2;
+            }
+            "--message" | "-m" => {
+                message = Some(next_value(rest, i, "--message <text>")?);
+                i += 2;
+            }
+            "--state-dir" => {
+                state_dir = Some(next_value(rest, i, "--state-dir <dir>")?);
+                i += 2;
+            }
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected chat argument: {other}"
+                )));
+            }
+        }
+    }
+    Ok(Command::Chat {
+        fay_id: fay_id.ok_or_else(|| CliError::Usage("chat requires --fay <fay_id>".to_owned()))?,
+        message: message
+            .ok_or_else(|| CliError::Usage("chat requires --message <text>".to_owned()))?,
+        state_dir,
+        json,
+    })
+}
+
 /// 用法帮助文本（纯）。`topic` 为某子命令名时给出该命令的用法。
 #[must_use]
 pub fn usage_text(topic: Option<&str>) -> String {
     match topic {
+        Some("up" | "serve") => "fayger up [--addr 127.0.0.1:7979] [--state-dir <dir>]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（FayGer Dashboard）。".to_owned(),
+        Some("profile") => "fayger profile [--json] [--state-dir <dir>]\n    输出标准化设备运行时环境描述文件（fayger-device-profile/1.0）。".to_owned(),
+        Some("wallet") => "fayger wallet <init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant> [--state-dir <dir>] [--json]\n    管理内置 FayID 助记词保险箱、不可关联动态码与 Auth Exchange 授权票据。".to_owned(),
+        Some("soul") => "fayger soul create --kind ifay|cofay --name <name> --out <path.buf> [--state-dir <dir>] [--json]\n    一键创建并密封可运行的 iFay 数字灵魂运行包或 coFay 公共席位包（.buf）。".to_owned(),
+        Some("chat") => "fayger chat --fay <fay_id> --message <text> [--state-dir <dir>] [--json]\n    在终端与已加载分身对话，展示 ICP (.ctx) 命令行结构化文本降级渲染。".to_owned(),
         Some("run") => "fayger run <file.buf>\n    加载并运行一个 BuF，打印运行报告。".to_owned(),
         Some("bridge") => {
             "fayger bridge <file.buf>\n    加载一个 BuF 并经真实适配层在当前宿主上运行，打印产生的 HostSyscall。".to_owned()
@@ -438,12 +1028,17 @@ pub fn usage_text(topic: Option<&str>) -> String {
 
 /// 顶层用法。
 const TOP_LEVEL_USAGE: &str = "\
-fayger - Fay 多平台虚拟运行环境（运行基座）
+fayger - Fay 多平台虚拟运行环境（三位一体运行基座：faygerd + CLI + Dashboard）
 
 用法：
     fayger <命令> [参数]
 
 命令：
+    up [--addr ...]      启动 faygerd 守护引擎与内嵌 FayGer Dashboard (http://127.0.0.1:7979)
+    profile [--json]     输出标准化设备运行时环境描述文件 (fayger-device-profile/1.0)
+    wallet <子命令>      管理内置 FayID 身份保险箱、动态码与 Auth Exchange 凭据兑换
+    soul create ...      一键创建可运行的 iFay 数字灵魂包或 coFay 公共席位包 (.buf)
+    chat ...             在终端与已加载 Fay 进行 ICP (.ctx) 对话并渲染降级文本
     run <file.buf>       加载并运行一个 BuF
     bridge <file.buf>    加载并经适配层在当前宿主上运行一个 BuF（打印 HostSyscall）
     inspect <file.buf>   加载并校验一个 BuF，打印 Manifest 摘要
@@ -458,14 +1053,13 @@ fayger - Fay 多平台虚拟运行环境（运行基座）
     help [命令]          打印用法帮助
 
 示例：
-    fayger version
-    fayger demo
-    fayger demo drone
-    fayger inspect app.buf
-    fayger run app.buf
-    fayger assemble drone.faymanifest.json
-    fayger evaluate --manifest drone.faymanifest.json --driver drone.driver.json --resource flight_controller --operation read_telemetry
-    fayger pack --entry main --section code:code=main.bin -o app.buf";
+    fayger up
+    fayger profile --json
+    fayger wallet init
+    fayger soul create --kind ifay --name alice --out alice.buf
+    fayger inspect alice.buf
+    fayger run alice.buf
+    fayger demo live-ifay";
 
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]

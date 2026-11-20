@@ -23,28 +23,56 @@
 
 pub mod args;
 pub mod commands;
+pub mod daemon;
+pub mod dashboard_html;
+pub mod device_profile;
 pub mod ego_package;
+pub mod engine;
 pub mod error;
 pub mod fs_ops;
 pub mod host_profile;
+pub mod icp_ego;
 pub mod live_ifay;
+pub mod soul;
+pub mod wallet;
 
-pub use args::{parse_args, usage_text, Command, PackSpec};
+pub use args::{parse_args, usage_text, Command, PackSpec, WalletSubcommand};
 pub use commands::{
     assemble_manifest, assemble_manifest_with_registry, bridge_object, conformance_command,
     default_policy, demo_drone_command, demo_object, evaluate_manifest_command, inspect_object,
     pack_bytes, render_bridge_report, run_object, RunReport,
 };
+pub use daemon::{serve_blocking, spawn_daemon, FaygerDaemonHandle, DEFAULT_DAEMON_ADDR};
+pub use device_profile::{
+    detect_device_runtime_profile, negotiate_embodiment_slices, profile_command,
+    DeviceRuntimeProfile, EmbodimentPlan, HostResourcePoolConfig, DEVICE_PROFILE_SCHEMA_VERSION,
+};
 pub use ego_package::{
     jcs_canonicalize, sign_ego_manifest_value, verify_and_mount_ego_package, EgoIntegrity,
     EgoSignature, FidelityGatePolicy, FidelityReport, VerifiedEgoMount, EGO_SIGNING_DOMAIN,
 };
+pub use engine::{
+    CapApprovalItem, DashboardSnapshot, FayGerEngine, FayInstanceView, FayingState,
+    RequestedHostAction, TpCognitiveEntry, TpSharedSession,
+};
 pub use error::{exit_code_of, CliError, ExitCode};
 pub use host_profile::{detect_host_environment, info_text};
+pub use icp_ego::{
+    render_ctx_terminal, run_ego_three_in_one, CtxAnnotation, CtxEnvelope, ICP_CTX_SCHEMA_VERSION,
+};
 pub use live_ifay::{
     demo_live_ifay_command, execute_live_ifay, verify_audit_chain, AuditChainBuilder,
     HashChainedAuditEntry, LiveIfayInputs, LiveIfayOutcome, TaskProgram, TaskStep,
     LIVE_IFAY_AUDIT_SCHEMA_VERSION, TASK_IR_SCHEMA_VERSION,
+};
+pub use soul::{
+    create_soul_buf_bytes, extract_soul_from_buf, SoulKind, SoulPackageMetadata,
+    SOUL_PACKAGE_SCHEMA_VERSION,
+};
+pub use wallet::{
+    derive_cofay, derive_ifay, exchange_auth_grant, init_wallet, issue_dynamic_code, show_wallet,
+    AuthExchangeGrant, DerivedCofayRecord, DerivedIfayRecord, DynamicCodeTicket, RoleCharter,
+    WalletInitReceipt, WalletPublicView,
 };
 
 use std::io::Write;
@@ -219,7 +247,261 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
                 ),
             )
         }
+        Command::Profile { json, state_dir } => {
+            let resolved = state_dir.as_deref().map(std::path::PathBuf::from);
+            let text = profile_command(*json, resolved.as_deref())?;
+            if *json {
+                writeln_out(out, &text)
+            } else {
+                write_out(out, &text)
+            }
+        }
+        Command::Wallet { subcommand } => dispatch_wallet(subcommand, out),
+        Command::SoulCreate {
+            kind,
+            name,
+            out: out_path,
+            capabilities,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let soul_kind = SoulKind::parse(kind)?;
+            let (bytes, meta) =
+                create_soul_buf_bytes(&dir, soul_kind, name, capabilities.as_deref())?;
+            if let Some(parent) = std::path::Path::new(out_path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).map_err(|err| CliError::Io {
+                    path: parent.display().to_string(),
+                    detail: err.to_string(),
+                })?;
+            }
+            fs_ops::write_file(out_path, &bytes)?;
+            let mut engine = FayGerEngine::open(&dir)?;
+            let mounted = engine.mount_buf_bytes(&bytes, out_path, name)?;
+            if *json {
+                let payload = serde_json::json!({
+                    "out_path": out_path,
+                    "bytes": bytes.len(),
+                    "fay_id": meta.fay_id,
+                    "kind": meta.kind,
+                    "faying_state": mounted.faying_state,
+                    "requested_capabilities": mounted.requested_capabilities,
+                    "effective_capabilities": mounted.effective_capabilities,
+                });
+                let pretty =
+                    serde_json::to_string_pretty(&payload).map_err(|err| CliError::Io {
+                        path: "<soul-json>".to_owned(),
+                        detail: err.to_string(),
+                    })?;
+                writeln_out(out, &pretty)
+            } else {
+                writeln_out(
+                    out,
+                    &format!(
+                        "Created runnable {} soul package\n  fay_id:        {}\n  name:          {}\n  out:           {out_path} ({} bytes)\n  faying_state:  {} (flip Faying switch in `fayger up` to enable host actions)\n  requested:     {}",
+                        meta.kind.as_str(),
+                        meta.fay_id,
+                        meta.display_name,
+                        bytes.len(),
+                        mounted.faying_state.as_str(),
+                        mounted.requested_capabilities.join(", ")
+                    ),
+                )
+            }
+        }
+        Command::Up { addr, state_dir } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            serve_blocking(addr, &dir, out)
+        }
+        Command::Chat {
+            fay_id,
+            message,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let mut engine = FayGerEngine::open(&dir)?;
+            let turn = engine.chat_or_act(fay_id, message, None)?;
+            if *json {
+                let pretty = serde_json::to_string_pretty(&turn.response_ctx).map_err(|err| {
+                    CliError::Io {
+                        path: "<chat-json>".to_owned(),
+                        detail: err.to_string(),
+                    }
+                })?;
+                writeln_out(out, &pretty)
+            } else {
+                write_out(out, &turn.terminal_text)
+            }
+        }
     }
+}
+
+#[allow(clippy::too_many_lines)]
+fn dispatch_wallet(sub: &WalletSubcommand, out: &mut dyn Write) -> Result<(), CliError> {
+    match sub {
+        WalletSubcommand::Init {
+            label,
+            seed_phrase,
+            force,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let receipt = init_wallet(&dir, label, seed_phrase.as_deref(), *force)?;
+            if *json {
+                write_json_pretty(out, &receipt)
+            } else {
+                writeln_out(
+                    out,
+                    &format!(
+                        "Initialized FayID Wallet Vault\n  label:                 {}\n  human_id (masked):     {}\n  human_id_commitment:   {}\n  recovery_mnemonic_once: {}\n  (Save mnemonic offline; subsequent `wallet show` never prints it.)",
+                        receipt.label,
+                        receipt.human_id_masked,
+                        receipt.human_id_commitment,
+                        receipt.recovery_mnemonic_once
+                    ),
+                )
+            }
+        }
+        WalletSubcommand::Show { state_dir, json } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let view = show_wallet(&dir)?;
+            if *json {
+                write_json_pretty(out, &view)
+            } else {
+                write_out(out, &view.render_text())
+            }
+        }
+        WalletSubcommand::DeriveIfay {
+            name,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let rec = derive_ifay(&dir, name)?;
+            if *json {
+                write_json_pretty(out, &rec)
+            } else {
+                writeln_out(
+                    out,
+                    &format!(
+                        "Derived iFay identity\n  ifay_id:        {}\n  name:           {}\n  public_key_hex: {}\n  discovery_mode: {}",
+                        rec.ifay_id, rec.name, rec.public_key_hex, rec.discovery_mode
+                    ),
+                )
+            }
+        }
+        WalletSubcommand::DeriveCofay {
+            name,
+            role,
+            scope,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let rec = derive_cofay(
+                &dir,
+                name,
+                role.as_deref().unwrap_or(""),
+                scope.as_deref().unwrap_or(""),
+            )?;
+            if *json {
+                write_json_pretty(out, &rec)
+            } else {
+                writeln_out(
+                    out,
+                    &format!(
+                        "Derived coFay seat identity\n  cofay_id:       {}\n  name:           {}\n  role_title:     {}\n  charter_schema: {}",
+                        rec.cofay_id,
+                        rec.name,
+                        rec.role_charter.role_title,
+                        rec.role_charter.schema_version
+                    ),
+                )
+            }
+        }
+        WalletSubcommand::DynamicCode {
+            purpose,
+            ttl_secs,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let ticket = issue_dynamic_code(&dir, purpose, *ttl_secs)?;
+            if *json {
+                write_json_pretty(out, &ticket)
+            } else {
+                writeln_out(
+                    out,
+                    &format!(
+                        "Issued unlinkable Dynamic Code\n  dynamic_code:    {}\n  purpose:         {}\n  expires_at_unix: {}",
+                        ticket.dynamic_code, ticket.purpose, ticket.expires_at_unix
+                    ),
+                )
+            }
+        }
+        WalletSubcommand::ExchangeGrant {
+            provider,
+            secret,
+            fay_id,
+            scopes,
+            ttl_secs,
+            state_dir,
+            json,
+        } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let grant = exchange_auth_grant(
+                &dir,
+                provider,
+                secret,
+                fay_id.as_deref(),
+                scopes.clone(),
+                *ttl_secs,
+            )?;
+            if *json {
+                write_json_pretty(out, &grant)
+            } else {
+                writeln_out(
+                    out,
+                    &format!(
+                        "Issued Auth Exchange Authorization Grant\n  grant_id:           {}\n  provider:           {}\n  scopes:             {}\n  secret_fingerprint: {}\n  expires_at_unix:    {}",
+                        grant.grant_id,
+                        grant.provider,
+                        grant.scopes.join(", "),
+                        grant.secret_fingerprint,
+                        grant.expires_at_unix
+                    ),
+                )
+            }
+        }
+    }
+}
+
+fn resolve_state_dir(explicit: Option<&str>) -> std::path::PathBuf {
+    if let Some(p) = explicit {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(env_dir) = std::env::var("FAYGER_STATE_DIR") {
+        if !env_dir.trim().is_empty() {
+            return std::path::PathBuf::from(env_dir);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join(".fayger").join("state");
+    }
+    std::path::PathBuf::from(".fayger-state")
+}
+
+fn write_json_pretty<T: serde::Serialize>(out: &mut dyn Write, val: &T) -> Result<(), CliError> {
+    let pretty = serde_json::to_string_pretty(val).map_err(|err| CliError::Io {
+        path: "<json-stdout>".to_owned(),
+        detail: err.to_string(),
+    })?;
+    writeln_out(out, &pretty)
 }
 
 /// 读取 UTF-8 文本文件（在薄壳边界上转换编码错误）。
