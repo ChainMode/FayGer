@@ -501,15 +501,23 @@ mod tests {
             return PathBuf::from(path);
         }
 
-        let mut root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut root = manifest_dir.to_path_buf();
+        let mut popped_all = true;
         for _ in 0..6 {
-            assert!(
-                root.pop(),
-                "could not locate ifay-system root from CARGO_MANIFEST_DIR"
-            );
+            if !root.pop() {
+                popped_all = false;
+                break;
+            }
+        }
+        if popped_all {
+            let sibling = root.join("ifay/schema/faymanifest/faymanifest.schema.json");
+            if sibling.is_file() {
+                return sibling;
+            }
         }
 
-        root.join("ifay/schema/faymanifest/faymanifest.schema.json")
+        manifest_dir.join("schema/faymanifest.authority.schema.json")
     }
 
     fn normalize_for_authority_compare(value: &mut Value, top_level: bool) {

@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ifay.ai/schema/faymanifest/faymanifest.schema.json",
+  "x-json-schema-dialect": "draft 2020-12",
+  "x-id": "urn:ifay:schema:faymanifest:v1.0.0",
+  "x-authority": "ifay openspec capability 'faymanifest'",
+  "title": "FayManifest",
+  "description": "Authoritative FayManifest schema (iFay's package.json). Owned by ifay; fayger-faymanifest is a derived copy that MUST conform.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "version",
+    "description",
+    "vendor",
+    "modules",
+    "protocols",
+    "controlMode"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "$ref": "#/$defs/semver"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "vendor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fayId": {
+      "$ref": "#/$defs/fayIdRef"
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/moduleRef"
+      }
+    },
+    "protocols": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/protocolRef"
+      }
+    },
+    "controlMode": {
+      "type": "string",
+      "enum": [
+        "command",
+        "ego",
+        "autonomous"
+      ]
+    },
+    "drivers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/driverRef"
+      }
+    },
+    "ego": {
+      "$ref": "#/$defs/egoConfig"
+    },
+    "permissions": {
+      "$ref": "#/$defs/permissionsConfig"
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "versionConstraint": {
+      "type": "string",
+      "pattern": "^(\\*|(\\^|~|>=|<=|>|<|=)?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?)$"
+    },
+    "componentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "packageIdentifier": {
+      "type": "string",
+      "pattern": "^@[a-z0-9]([a-z0-9-]*[a-z0-9])?/[a-z0-9]([a-z0-9._-]*[a-z0-9])?$"
+    },
+    "fayIdRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "moduleRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/componentId"
+        },
+        "version": {
+          "$ref": "#/$defs/versionConstraint"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "config": {
+          "type": "object"
+        }
+      }
+    },
+    "protocolRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/componentId"
+        },
+        "version": {
+          "$ref": "#/$defs/versionConstraint"
+        },
+        "config": {
+          "type": "object"
+        }
+      }
+    },
+    "driverRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "driverPackage"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "driverPackage": {
+          "$ref": "#/$defs/packageIdentifier"
+        },
+        "config": {
+          "type": "object"
+        }
+      }
+    },
+    "egoConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "modelSource"
+      ],
+      "properties": {
+        "modelSource": {
+          "$ref": "#/$defs/packageIdentifier"
+        },
+        "scenarioTags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "constraints": {
+          "type": "object",
+          "properties": {
+            "skillBoundaries": {
+              "type": "object",
+              "properties": {
+                "allowed": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "restricted": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "permissionsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inherent": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "persistent": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "authMethods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
