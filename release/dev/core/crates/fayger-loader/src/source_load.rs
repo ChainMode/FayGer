@@ -229,7 +229,7 @@ mod tests {
         // 骨架就位：manifest 完整
         assert_eq!(art.manifest.sections.len(), 2);
         // loader 尚未加载任何段
-        assert!(art.loader().expect("loader").loaded_ids().is_empty());
+        assert_eq!(art.loader().expect("loader").loaded_ids().len(), 0);
         // 首次访问后填充
         assert_eq!(art.section("code").expect("code"), &[1, 2, 3, 4]);
     }

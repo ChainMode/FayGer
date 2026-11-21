@@ -208,7 +208,7 @@ mod tests {
             SectionVisibility::Required,
             ProfileConstraints::default(),
         );
-        assert!(unmet_reasons(&s, &profile(&[], None, &[])).is_empty());
+        assert_eq!(unmet_reasons(&s, &profile(&[], None, &[])).len(), 0);
     }
 
     #[test]

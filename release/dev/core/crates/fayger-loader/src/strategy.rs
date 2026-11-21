@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn empty_manifest_yields_empty_plan() {
         let m = manifest_with(&[]);
-        assert!(build_plan(&m).is_empty());
+        assert_eq!(build_plan(&m).len(), 0);
     }
 
     #[test]

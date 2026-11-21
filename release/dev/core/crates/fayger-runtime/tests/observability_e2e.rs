@@ -113,10 +113,7 @@ fn full_lifecycle_with_quota_suspend_emits_consistent_events() {
         .iter()
         .filter(|e| e.category == EventCategory::Quota)
         .collect();
-    assert!(
-        !quota_events.is_empty(),
-        "expected at least one Quota event"
-    );
+    assert_ne!(quota_events.len(), 0, "expected at least one Quota event");
     assert!(quota_events.iter().any(|e| matches!(
         &e.payload,
         EventPayload::Quota {
