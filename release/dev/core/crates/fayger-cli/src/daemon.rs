@@ -6,6 +6,7 @@
 use crate::dashboard_html::dashboard_index_html;
 use crate::engine::{FayGerEngine, RequestedHostAction};
 use crate::error::CliError;
+use crate::merit::{parse_positive_mu_to_raw, MeritAddInput, MeritConsumeInput};
 use crate::soul::SoulKind;
 use crate::wallet::{
     derive_cofay, derive_ifay, exchange_auth_grant, init_wallet, issue_dynamic_code, show_wallet,
@@ -63,7 +64,19 @@ impl Drop for FaygerDaemonHandle {
 
 /// 在后台线程启动 `faygerd` 并立即返回 [`FaygerDaemonHandle`]。
 pub fn spawn_daemon(bind_addr: &str, state_dir: &Path) -> Result<FaygerDaemonHandle, CliError> {
-    let engine = FayGerEngine::open(state_dir)?;
+    spawn_daemon_with_gmchain(bind_addr, state_dir, None)
+}
+
+/// 在后台线程启动 `faygerd`，可选覆盖回环 `GMChain` JSON-RPC 端点。
+pub fn spawn_daemon_with_gmchain(
+    bind_addr: &str,
+    state_dir: &Path,
+    gmchain_endpoint: Option<&str>,
+) -> Result<FaygerDaemonHandle, CliError> {
+    let mut engine = FayGerEngine::open(state_dir)?;
+    if let Some(ep) = gmchain_endpoint {
+        let _ = engine.update_merit_config(Some(ep))?;
+    }
     let listener = TcpListener::bind(bind_addr).map_err(|err| CliError::Io {
         path: bind_addr.to_owned(),
         detail: format!("failed to bind faygerd on {bind_addr}: {err}"),
@@ -93,7 +106,21 @@ pub fn serve_blocking(
     state_dir: &Path,
     banner_out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
-    let engine = FayGerEngine::open(state_dir)?;
+    serve_blocking_with_gmchain(bind_addr, state_dir, None, banner_out)
+}
+
+/// 在当前线程阻塞运行 `faygerd`，支持通过 `--gmchain-endpoint` 指定本机回环 `GMChain` RPC 端点。
+pub fn serve_blocking_with_gmchain(
+    bind_addr: &str,
+    state_dir: &Path,
+    gmchain_endpoint: Option<&str>,
+    banner_out: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
+    let mut engine = FayGerEngine::open(state_dir)?;
+    if let Some(ep) = gmchain_endpoint {
+        let _ = engine.update_merit_config(Some(ep))?;
+    }
+    let gm_cfg = engine.merit_config();
     let listener = TcpListener::bind(bind_addr).map_err(|err| CliError::Io {
         path: bind_addr.to_owned(),
         detail: format!("failed to bind faygerd on {bind_addr}: {err}"),
@@ -104,8 +131,10 @@ pub fn serve_blocking(
     })?;
 
     let banner = format!(
-        "FayGer Three-in-One Daemon (faygerd v{}) is UP!\n  Dashboard UI:  http://{local_addr}\n  REST API Base: http://{local_addr}/api/v1\n  State Dir:     {}\nPress Ctrl+C to stop.\n",
+        "FayGer Three-in-One Daemon (faygerd v{}) is UP!\n  Dashboard UI:  http://{local_addr}\n  REST API Base: http://{local_addr}/api/v1\n  GMChain RPC:   {} [{}]\n  State Dir:     {}\nPress Ctrl+C to stop.\n",
         crate::FAYGER_VERSION,
+        gm_cfg.rpc_url,
+        gm_cfg.sync_mode,
         state_dir.display()
     );
     banner_out
@@ -414,6 +443,12 @@ fn route_request(req: &HttpRequest, shared_engine: &Arc<Mutex<FayGerEngine>>) ->
                 true,
             )
         }
+        ("GET", "/api/v1/merit/config") => HttpResponse::json_ok(&engine.merit_config()),
+        ("POST" | "PUT", "/api/v1/merit/config") => {
+            let body = parse_json_body(&req.body);
+            let ep = body.get("gmchain_endpoint").and_then(Value::as_str);
+            map_cli_res(engine.update_merit_config(ep), false)
+        }
         ("GET", "/api/v1/audit") => {
             let (entries, verified) = engine.audit_log();
             HttpResponse::json_ok(&json!({
@@ -484,6 +519,93 @@ fn route_parameterized(req: &HttpRequest, engine: &mut FayGerEngine) -> HttpResp
                 .get("host_action")
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
             map_cli_res(engine.chat_or_act(&id, message, explicit_action), false)
+        }
+        ("GET", ["api", "v1", "fays", instance_id, "merit"]) => {
+            let id = percent_decode(instance_id);
+            map_cli_res(engine.get_fay_merit(&id), false)
+        }
+        ("POST", ["api", "v1", "fays", instance_id, "merit", "add"]) => {
+            let id = percent_decode(instance_id);
+            let body = parse_json_body(&req.body);
+            let title = body
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let domain_chain_id = body
+                .get("domain_chain_id")
+                .and_then(Value::as_str)
+                .unwrap_or("gmc-open-science")
+                .to_owned();
+            let Some(amount_mu) = body.get("amount_mu").and_then(Value::as_i64).or_else(|| {
+                body.get("amount_mu")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+            }) else {
+                return HttpResponse::json_err(400, "missing or invalid 'amount_mu' integer");
+            };
+            let horizon_days = body
+                .get("horizon_days")
+                .and_then(Value::as_u64)
+                .unwrap_or(90);
+            let summary = body
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let input = MeritAddInput {
+                title,
+                domain_chain_id,
+                amount_mu,
+                horizon_days,
+                summary,
+            };
+            map_cli_res(engine.add_fay_merit(&id, &input), false)
+        }
+        ("POST", ["api", "v1", "fays", instance_id, "merit", "consume"]) => {
+            let id = percent_decode(instance_id);
+            let body = parse_json_body(&req.body);
+            let priority_kind = body
+                .get("priority_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let Some(amount_val) = body.get("amount_mu") else {
+                return HttpResponse::json_err(400, "missing 'amount_mu'");
+            };
+            let (amount_raw, amount_mu_wire) = match parse_positive_mu_to_raw(amount_val) {
+                Ok(pair) => pair,
+                Err(err) => return cli_err_to_http(&err),
+            };
+            let reason = body
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let proposal_id = body
+                .get("proposal_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let input = MeritConsumeInput {
+                priority_kind,
+                amount_raw,
+                amount_mu_wire,
+                reason,
+                proposal_id,
+            };
+            map_cli_res(engine.consume_fay_merit(&id, &input), false)
+        }
+        ("POST", ["api", "v1", "fays", instance_id, "merit", "credential"]) => {
+            let id = percent_decode(instance_id);
+            let body = parse_json_body(&req.body);
+            let privacy_tier = match body.get("privacy_tier") {
+                Some(v) => v.as_str().unwrap_or(""),
+                None => "L1_PUBLIC",
+            };
+            map_cli_res(
+                engine.present_fay_merit_credential(&id, privacy_tier),
+                false,
+            )
         }
         ("POST", ["api", "v1", "cap", "approvals", approval_id, "decide"]) => {
             let id = percent_decode(approval_id);

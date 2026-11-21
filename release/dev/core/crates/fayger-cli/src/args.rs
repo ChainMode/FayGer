@@ -121,6 +121,8 @@ pub enum Command {
         addr: String,
         /// 可选状态目录。
         state_dir: Option<String>,
+        /// 可选回环 `GMChain` JSON-RPC 端点（默认 `http://127.0.0.1:8546`）。
+        gmchain_endpoint: Option<String>,
     },
     /// 在命令行中与已挂载 `Fay` 进行 `ICP`（`.ctx`）对话并展示终端文本降级结果。
     Chat {
@@ -930,10 +932,11 @@ fn parse_soul(rest: &[String]) -> Result<Command, CliError> {
     })
 }
 
-/// 解析 `up [--addr 127.0.0.1:7979] [--state-dir <dir>]`。
+/// 解析 `up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>]`。
 fn parse_up(rest: &[String]) -> Result<Command, CliError> {
     let mut addr = "127.0.0.1:7979".to_owned();
     let mut state_dir = None;
+    let mut gmchain_endpoint = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -945,12 +948,22 @@ fn parse_up(rest: &[String]) -> Result<Command, CliError> {
                 state_dir = Some(next_value(rest, i, "--state-dir <dir>")?);
                 i += 2;
             }
+            "--gmchain-endpoint" => {
+                let raw = next_value(rest, i, "--gmchain-endpoint <http://127.0.0.1:8546>")?;
+                let normalized = crate::merit::normalize_loopback_gmchain_endpoint(&raw)?;
+                gmchain_endpoint = Some(normalized);
+                i += 2;
+            }
             other => {
                 return Err(CliError::Usage(format!("unexpected up argument: {other}")));
             }
         }
     }
-    Ok(Command::Up { addr, state_dir })
+    Ok(Command::Up {
+        addr,
+        state_dir,
+        gmchain_endpoint,
+    })
 }
 
 /// 解析 `chat --fay <fay_id> --message <text> [--state-dir <dir>] [--json]`。
@@ -998,7 +1011,7 @@ fn parse_chat(rest: &[String]) -> Result<Command, CliError> {
 #[must_use]
 pub fn usage_text(topic: Option<&str>) -> String {
     match topic {
-        Some("up" | "serve") => "fayger up [--addr 127.0.0.1:7979] [--state-dir <dir>]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（FayGer Dashboard）。".to_owned(),
+        Some("up" | "serve") => "fayger up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（FayGer Dashboard，联动 GMChain/MeriToken）。".to_owned(),
         Some("profile") => "fayger profile [--json] [--state-dir <dir>]\n    输出标准化设备运行时环境描述文件（fayger-device-profile/1.0）。".to_owned(),
         Some("wallet") => "fayger wallet <init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant> [--state-dir <dir>] [--json]\n    管理内置 FayID 助记词保险箱、不可关联动态码与 Auth Exchange 授权票据。".to_owned(),
         Some("soul") => "fayger soul create --kind ifay|cofay --name <name> --out <path.buf> [--state-dir <dir>] [--json]\n    一键创建并密封可运行的 iFay 数字灵魂运行包或 coFay 公共席位包（.buf）。".to_owned(),
@@ -1357,5 +1370,33 @@ mod tests {
         assert!(usage_text(None).contains("fayger"));
         assert!(usage_text(Some("run")).contains("run"));
         assert!(usage_text(Some("pack")).contains("section"));
+        assert!(usage_text(Some("up")).contains("--gmchain-endpoint"));
+    }
+
+    #[test]
+    fn up_accepts_loopback_gmchain_endpoint_and_rejects_remote() {
+        assert_eq!(
+            parse_args(&argv(&[
+                "up",
+                "--addr",
+                "127.0.0.1:7979",
+                "--gmchain-endpoint",
+                "http://localhost:8546/rpc"
+            ]))
+            .expect("valid loopback"),
+            Command::Up {
+                addr: "127.0.0.1:7979".to_owned(),
+                state_dir: None,
+                gmchain_endpoint: Some("http://localhost:8546".to_owned()),
+            }
+        );
+        assert!(matches!(
+            parse_args(&argv(&[
+                "up",
+                "--gmchain-endpoint",
+                "http://example.com:8546"
+            ])),
+            Err(CliError::Usage(_))
+        ));
     }
 }

@@ -33,6 +33,7 @@ pub mod fs_ops;
 pub mod host_profile;
 pub mod icp_ego;
 pub mod live_ifay;
+pub mod merit;
 pub mod soul;
 pub mod wallet;
 
@@ -40,9 +41,12 @@ pub use args::{parse_args, usage_text, Command, PackSpec, WalletSubcommand};
 pub use commands::{
     assemble_manifest, assemble_manifest_with_registry, bridge_object, conformance_command,
     default_policy, demo_drone_command, demo_object, evaluate_manifest_command, inspect_object,
-    pack_bytes, render_bridge_report, run_object, RunReport,
+    pack_bytes, render_bridge_report, render_merit_standing_summary, run_object, RunReport,
 };
-pub use daemon::{serve_blocking, spawn_daemon, FaygerDaemonHandle, DEFAULT_DAEMON_ADDR};
+pub use daemon::{
+    serve_blocking, serve_blocking_with_gmchain, spawn_daemon, spawn_daemon_with_gmchain,
+    FaygerDaemonHandle, DEFAULT_DAEMON_ADDR,
+};
 pub use device_profile::{
     detect_device_runtime_profile, negotiate_embodiment_slices, profile_command,
     DeviceRuntimeProfile, EmbodimentPlan, HostResourcePoolConfig, DEVICE_PROFILE_SCHEMA_VERSION,
@@ -64,6 +68,12 @@ pub use live_ifay::{
     demo_live_ifay_command, execute_live_ifay, verify_audit_chain, AuditChainBuilder,
     HashChainedAuditEntry, LiveIfayInputs, LiveIfayOutcome, TaskProgram, TaskStep,
     LIVE_IFAY_AUDIT_SCHEMA_VERSION, TASK_IR_SCHEMA_VERSION,
+};
+pub use merit::{
+    MeriTokenPocketState, MeritAddInput, MeritAddReceipt, MeritConfigView, MeritConsumeInput,
+    MeritConsumeReceipt, MeritCredentialPresentation, MeritLedgerEntry, MeritStandingView,
+    DEFAULT_GMCHAIN_ENDPOINT, INITIAL_CONSUMABLE_MERIT_RAW, INITIAL_CUR_MERIT_RAW,
+    MERIT_CREDENTIAL_SCHEMA_VERSION, MERIT_SCALE, MIN_MERIT_E_RAW,
 };
 pub use soul::{
     create_soul_buf_bytes, extract_soul_from_buf, SoulKind, SoulPackageMetadata,
@@ -312,9 +322,13 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
                 )
             }
         }
-        Command::Up { addr, state_dir } => {
+        Command::Up {
+            addr,
+            state_dir,
+            gmchain_endpoint,
+        } => {
             let dir = resolve_state_dir(state_dir.as_deref());
-            serve_blocking(addr, &dir, out)
+            serve_blocking_with_gmchain(addr, &dir, gmchain_endpoint.as_deref(), out)
         }
         Command::Chat {
             fay_id,

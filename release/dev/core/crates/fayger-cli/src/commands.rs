@@ -474,6 +474,38 @@ pub fn demo_drone_command() -> Result<String, CliError> {
     )
 }
 
+/// 渲染一个 `Fay` 的 `MeriToken`（`美誉值`, `μ`）账户摘要纯文本报告（纯函数，不触达 FS/网络）。
+#[must_use]
+pub fn render_merit_standing_summary(standing: &crate::merit::MeritStandingView) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "MeriToken Standing ({})", standing.fay_id);
+    let _ = writeln!(s, "  canonical_fayid:  {}", standing.canonical_fayid);
+    let _ = writeln!(
+        s,
+        "  cur_merit:        {} μ (raw={})",
+        standing.cur_merit_formatted, standing.cur_merit_raw
+    );
+    let _ = writeln!(
+        s,
+        "  consumable_pool:  {} μ (raw={})",
+        standing.consumable_merit_formatted, standing.consumable_merit_raw
+    );
+    let _ = writeln!(
+        s,
+        "  min_merit_floor:  {} μ (raw={}, protected)",
+        standing.min_merit_floor_formatted, standing.min_merit_floor_raw
+    );
+    let _ = writeln!(s, "  sync_mode:        {}", standing.sync_mode);
+    let _ = writeln!(s, "  block_height:     #{}", standing.last_block_height);
+    let _ = writeln!(s, "  state_root_hex:   {}", standing.last_state_root_hex);
+    let _ = writeln!(
+        s,
+        "  constitutional:   non_monetary={} (0 fees, 0 transfer)",
+        standing.non_monetary
+    );
+    s
+}
+
 fn command_validation(reason: &'static str, field: &'static str) -> FaygerError {
     FaygerError::new(
         ErrorCode::FmValidationFailed,
@@ -671,5 +703,16 @@ mod tests {
     fn assemble_manifest_propagates_parse_failure() {
         let err = assemble_manifest("{ not valid").expect_err("parse fail");
         assert!(matches!(err, crate::error::CliError::Failure(_)));
+    }
+
+    #[test]
+    fn render_merit_standing_summary_formats_constitutional_fields() {
+        let pocket = crate::merit::MeriTokenPocketState::initial_for("ifay_demo");
+        let standing = pocket.to_standing_view("ifay_demo", crate::merit::DEFAULT_GMCHAIN_ENDPOINT);
+        let text = super::render_merit_standing_summary(&standing);
+        assert!(text.contains("cur_merit:        5.00 μ"));
+        assert!(text.contains("consumable_pool:  2.28 μ"));
+        assert!(text.contains("min_merit_floor:  2.72 μ"));
+        assert!(text.contains("non_monetary=true"));
     }
 }

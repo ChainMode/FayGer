@@ -22,8 +22,9 @@
 )]
 
 use fayger_cli::{
-    parse_args, run_cli, spawn_daemon, Command, DEVICE_PROFILE_SCHEMA_VERSION,
-    ICP_CTX_SCHEMA_VERSION,
+    parse_args, run_cli, spawn_daemon, spawn_daemon_with_gmchain, verify_audit_chain, Command,
+    HashChainedAuditEntry, DEVICE_PROFILE_SCHEMA_VERSION, ICP_CTX_SCHEMA_VERSION,
+    MERIT_CREDENTIAL_SCHEMA_VERSION,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -115,7 +116,7 @@ fn faygerd_full_mvp_closed_loop_over_ephemeral_tcp() {
     let mut daemon = spawn_daemon("127.0.0.1:0", &state_dir).expect("spawn faygerd");
     let addr = daemon.local_addr();
 
-    // 1. Embedded Dashboard HTML check (5 tabs, offline-ready, no external CDN)
+    // 1. Embedded Dashboard HTML check (6 tabs, offline-ready, no external CDN)
     let (html_code, html) = http_call(addr, "GET", "/", None);
     assert_eq!(html_code, 200);
     assert!(html.contains("FayGer Local Runtime Console"));
@@ -124,6 +125,10 @@ fn faygerd_full_mvp_closed_loop_over_ephemeral_tcp() {
     assert!(html.contains("G0 一键急刹"));
     assert!(html.contains("ICP 富交互对话与 CAP 审批"));
     assert!(html.contains("双 Fay 心灵感应协作间"));
+    assert!(html.contains("6. 美誉值与优先权 (MeriToken)"));
+    assert!(html.contains("Panel A — 美誉值展示与分级凭证出示"));
+    assert!(html.contains("Panel B — 添加美誉值"));
+    assert!(html.contains("Panel C — 消费美誉值"));
     assert!(!html.contains("https://cdn."));
 
     // 2. Device Runtime Environment Profile (`fayger-device-profile/1.0`)
@@ -632,6 +637,20 @@ fn cli_subcommands_profile_wallet_soul_and_chat_work_end_to_end() {
         Command::Up {
             addr: "127.0.0.1:9090".to_owned(),
             state_dir: None,
+            gmchain_endpoint: None,
+        }
+    );
+    assert_eq!(
+        parse_args(&[
+            "up".to_owned(),
+            "--gmchain-endpoint".to_owned(),
+            "http://127.0.0.1:8546".to_owned()
+        ])
+        .unwrap(),
+        Command::Up {
+            addr: "127.0.0.1:7979".to_owned(),
+            state_dir: None,
+            gmchain_endpoint: Some("http://127.0.0.1:8546".to_owned()),
         }
     );
     assert_eq!(
@@ -639,6 +658,7 @@ fn cli_subcommands_profile_wallet_soul_and_chat_work_end_to_end() {
         Command::Up {
             addr: "127.0.0.1:7979".to_owned(),
             state_dir: None,
+            gmchain_endpoint: None,
         }
     );
 
@@ -686,5 +706,466 @@ fn faying_heartbeat_timeout_automatically_reverts_instance_to_rogue() {
         .contains("DENY_ROGUE_FAY"));
 
     daemon.shutdown();
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn meritoken_local_fallback_faying_guard_floor_protection_and_credentials_e2e() {
+    let state_dir = fresh_state_dir("merit-local-e2e");
+    // Reserve & close an ephemeral loopback port so local fallback is 100% deterministic.
+    let closed_listener = TcpListener::bind("127.0.0.1:0").expect("bind closed port");
+    let closed_addr = closed_listener.local_addr().expect("closed addr");
+    drop(closed_listener);
+
+    let mut daemon = spawn_daemon_with_gmchain(
+        "127.0.0.1:0",
+        &state_dir,
+        Some(&format!("http://{closed_addr}")),
+    )
+    .expect("spawn faygerd");
+    let addr = daemon.local_addr();
+
+    // Non-loopback GMChain endpoint must be rejected with 400
+    let (bad_cfg_code, _) = http_json(
+        addr,
+        "POST",
+        "/api/v1/merit/config",
+        Some(&json!({"gmchain_endpoint": "http://10.0.0.8:8546"})),
+    );
+    assert_eq!(bad_cfg_code, 400);
+
+    let (cfg_code, cfg_val) = http_json(addr, "GET", "/api/v1/merit/config", None);
+    assert_eq!(cfg_code, 200);
+    assert_eq!(cfg_val["sync_mode"], "local_pocket_fallback");
+
+    // 1. Create & load an iFay soul (starts in ROGUE)
+    let (create_code, ifay_view) = http_json(
+        addr,
+        "POST",
+        "/api/v1/fays/create",
+        Some(&json!({"kind": "ifay", "name": "MeritPrimeSoul"})),
+    );
+    assert_eq!(create_code, 201);
+    assert_eq!(ifay_view["faying_state"], "ROGUE");
+    let instance_id = ifay_view["instance_id"].as_str().unwrap().to_owned();
+    let fay_id = ifay_view["fay_id"].as_str().unwrap().to_owned();
+
+    // 2. ROGUE allows GET /api/v1/fays/<instance_id>/merit (200), but blocks add & consume (403)!
+    let (get_rogue_code, initial_merit) = http_json(
+        addr,
+        "GET",
+        &format!("/api/v1/fays/{instance_id}/merit"),
+        None,
+    );
+    assert_eq!(get_rogue_code, 200);
+    assert_eq!(initial_merit["cur_merit_raw"], 5_000_000);
+    assert_eq!(initial_merit["min_merit_floor_raw"], 2_718_281);
+    assert_eq!(initial_merit["consumable_merit_raw"], 2_281_719);
+    assert_eq!(initial_merit["sync_mode"], "local_pocket_fallback");
+
+    let (add_rogue_code, add_rogue_err) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/merit/add"),
+        Some(&json!({
+            "title": "Blocked Contribution",
+            "domain_chain_id": "gmc-open-science",
+            "amount_mu": 40,
+            "horizon_days": 90,
+            "summary": "Must be rejected in ROGUE"
+        })),
+    );
+    assert_eq!(add_rogue_code, 403);
+    assert!(add_rogue_err["error"].as_str().unwrap().contains("ROGUE"));
+
+    let (consume_rogue_code, consume_rogue_err) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/merit/consume"),
+        Some(&json!({
+            "priority_kind": "voting_priority",
+            "amount_mu": 1,
+            "reason": "Blocked in ROGUE",
+            "proposal_id": "prop-001"
+        })),
+    );
+    assert_eq!(consume_rogue_code, 403);
+    assert!(consume_rogue_err["error"]
+        .as_str()
+        .unwrap()
+        .contains("ROGUE"));
+
+    // 3. Switch Faying ON -> POST merit/add (+40 μ) -> POST merit/consume (-12 μ voting_priority)
+    let (faying_code, _) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/faying"),
+        Some(&json!({"grade": "G2", "ttl_secs": 600, "heartbeat_timeout_secs": 120})),
+    );
+    assert_eq!(faying_code, 200);
+
+    let (add_code, add_res) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/merit/add"),
+        Some(&json!({
+            "title": "Reproducible Open-Science Benchmark",
+            "domain_chain_id": "gmc-open-science",
+            "amount_mu": 40,
+            "horizon_days": 90,
+            "summary": "Verified artifact hash & peer attestation"
+        })),
+    );
+    assert_eq!(add_code, 200);
+    assert_eq!(add_res["cur_merit_raw"], 45_000_000);
+    let floor_after_add = add_res["min_merit_floor_raw"].as_i64().unwrap();
+    assert!(floor_after_add >= 2_718_281);
+    let cur_after_add = add_res["cur_merit_raw"].as_i64().unwrap();
+
+    let (consume_code, consume_res) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/merit/consume"),
+        Some(&json!({
+            "priority_kind": "voting_priority",
+            "amount_mu": 12,
+            "reason": "Weighted governance vote on open protocol upgrade",
+            "proposal_id": "prop-001"
+        })),
+    );
+    assert_eq!(consume_code, 200);
+    assert_eq!(consume_res["before_cur_merit_raw"], cur_after_add);
+    assert_eq!(
+        consume_res["after_cur_merit_raw"],
+        cur_after_add - 12_000_000
+    );
+    assert_eq!(consume_res["cur_merit_raw"], 33_000_000);
+    // Constitutional invariant: minMerit floor stays strictly unchanged during priority consumption!
+    assert_eq!(consume_res["min_merit_floor_raw"], floor_after_add);
+    assert_eq!(
+        consume_res["consumable_merit_raw"],
+        33_000_000 - floor_after_add
+    );
+
+    // 4. Over-consuming past (curMerit - minMerit) returns 400 while preserving minMerit!
+    // Note: 31 μ < curMerit (33 μ), yet 31 μ > consumable_merit!
+    let (over_code, over_err) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/merit/consume"),
+        Some(&json!({
+            "priority_kind": "cofay_service_priority",
+            "amount_mu": 31,
+            "reason": "Attempt to dip below minMerit floor"
+        })),
+    );
+    assert_eq!(over_code, 400);
+    assert!(over_err["error"].as_str().unwrap().contains("minMerit"));
+
+    // 5. L1 / L2 / L3 credentials generate cleanly with JCS SHA-256 commitments
+    for tier in ["L1_PUBLIC", "L2_BAND", "L3_ZK_BLINDED"] {
+        let (cred_code, cred) = http_json(
+            addr,
+            "POST",
+            &format!("/api/v1/fays/{instance_id}/merit/credential"),
+            Some(&json!({"privacy_tier": tier})),
+        );
+        assert_eq!(cred_code, 200);
+        assert_eq!(cred["schema_version"], MERIT_CREDENTIAL_SCHEMA_VERSION);
+        assert_eq!(cred["privacy_tier"], tier);
+        assert_eq!(cred["commitment_sha256"].as_str().unwrap().len(), 64);
+        if tier == "L3_ZK_BLINDED" {
+            let raw_cred = serde_json::to_string(&cred).unwrap();
+            assert!(!raw_cred.contains(&fay_id));
+        }
+    }
+
+    // 6. ICP chat mentioning 美誉 / 优先权 / μ includes structured MeritStandingCard (.ctx)
+    let (chat_code, chat_turn) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{instance_id}/chat"),
+        Some(&json!({"message": "请展示我当前的美誉值与可消减优先权 μ"})),
+    );
+    assert_eq!(chat_code, 200);
+    let has_merit_card = chat_turn["response_ctx"]["annotations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["kind"] == "merit_standing_card");
+    assert!(has_merit_card);
+
+    // 7. Audit chain verification remains true and records all merit stages
+    let (audit_status, aud) = http_json(addr, "GET", "/api/v1/audit", None);
+    assert_eq!(audit_status, 200);
+    assert_eq!(aud["verified"], true);
+    let parsed_entries: Vec<HashChainedAuditEntry> =
+        serde_json::from_value(aud["entries"].clone()).expect("deserialize audit entries");
+    assert!(verify_audit_chain(&parsed_entries));
+    assert!(parsed_entries
+        .iter()
+        .any(|e| e.stage == "merit.contribution_added"));
+    assert!(parsed_entries
+        .iter()
+        .any(|e| e.stage == "merit.priority_consumed"));
+    assert!(parsed_entries
+        .iter()
+        .any(|e| e.stage == "merit.credential_presented"));
+
+    daemon.shutdown();
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn meritoken_live_gmchain_json_rpc_wire_roundtrip_e2e() {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Clone)]
+    struct MockChainAccount {
+        cur_raw: i64,
+        floor_raw: i64,
+    }
+
+    let gmc_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock gmc-node");
+    let gmc_addr = gmc_listener.local_addr().expect("gmc addr");
+    let stop_gmc = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop_gmc);
+    let methods_seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let methods_clone = Arc::clone(&methods_seen);
+
+    let gmc_thread = thread::spawn(move || {
+        let mut accounts: HashMap<String, MockChainAccount> = HashMap::new();
+        let mut block_height: u64 = 100;
+
+        for incoming in gmc_listener.incoming() {
+            if stop_clone.load(Ordering::SeqCst) {
+                break;
+            }
+            let Ok(mut stream) = incoming else {
+                continue;
+            };
+            let mut reader = BufReader::new(&stream);
+            let mut req_line = String::new();
+            if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut content_len = 0usize;
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" || h == "\n" {
+                    break;
+                }
+                if let Some((k, v)) = h.split_once(':') {
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        content_len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            if content_len == 0 && !req_line.starts_with("POST /rpc ") {
+                continue;
+            }
+            let mut body = vec![0u8; content_len];
+            if content_len > 0 {
+                let _ = reader.read_exact(&mut body);
+            }
+            let Ok(rpc_req) = serde_json::from_slice::<Value>(&body) else {
+                continue;
+            };
+            assert_eq!(rpc_req["jsonrpc"], "2.0");
+            let method = rpc_req["method"].as_str().unwrap_or("").to_owned();
+            let params = &rpc_req["params"];
+            methods_clone.lock().unwrap().push(method.clone());
+
+            let rpc_resp = match method.as_str() {
+                "gmc_registerExternalFay" => {
+                    assert_eq!(params["role_label"], "FayGer Digital Soul");
+                    let fid = params["fay_id"].as_str().unwrap().to_owned();
+                    let acct = accounts.entry(fid.clone()).or_insert(MockChainAccount {
+                        cur_raw: 8_000_000,
+                        floor_raw: 2_718_281,
+                    });
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": rpc_req["id"],
+                        "result": {
+                            "canonical_fayid": fid,
+                            "cur_merit_raw": acct.cur_raw,
+                            "consumable_merit_raw": acct.cur_raw - acct.floor_raw,
+                            "min_merit_floor_raw": acct.floor_raw,
+                            "block_height": block_height,
+                            "state_root_hex": format!("{block_height:064x}"),
+                        }
+                    })
+                }
+                "gmc_recordContribution" => {
+                    let fid = params["fay_id"].as_str().unwrap().to_owned();
+                    let amount_mu = params["amount_mu"].as_i64().unwrap();
+                    let acct = accounts.entry(fid).or_insert(MockChainAccount {
+                        cur_raw: 8_000_000,
+                        floor_raw: 2_718_281,
+                    });
+                    let delta = amount_mu * 1_000_000;
+                    acct.cur_raw += delta;
+                    acct.floor_raw += delta / 10;
+                    block_height += 1;
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": rpc_req["id"],
+                        "result": {
+                            "batch_id": format!("gmc_batch_{block_height}"),
+                            "cur_merit_raw": acct.cur_raw,
+                            "consumable_merit_raw": acct.cur_raw - acct.floor_raw,
+                            "min_merit_floor_raw": acct.floor_raw,
+                            "block_height": block_height,
+                            "state_root_hex": format!("{block_height:064x}"),
+                        }
+                    })
+                }
+                "gmc_consumePriority" => {
+                    assert_eq!(params["approve"], true);
+                    let fid = params["fay_id"].as_str().unwrap().to_owned();
+                    let amt_str = params["amount_mu"].as_str().unwrap();
+                    let amt_mu: i64 = amt_str.parse().unwrap();
+                    let consumed_raw = amt_mu * 1_000_000;
+                    let acct = accounts.get_mut(&fid).unwrap();
+                    let consumable = acct.cur_raw - acct.floor_raw;
+                    if consumed_raw > consumable {
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_req["id"],
+                            "error": {
+                                "code": -32001,
+                                "message": "exceeds consumable_merit_raw; minMerit floor protected"
+                            }
+                        })
+                    } else {
+                        let before = acct.cur_raw;
+                        acct.cur_raw -= consumed_raw;
+                        block_height += 1;
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_req["id"],
+                            "result": {
+                                "consumption_id": format!("gmc_csm_{block_height}"),
+                                "consumed_mu_raw": consumed_raw,
+                                "before_cur_merit_raw": before,
+                                "after_cur_merit_raw": acct.cur_raw,
+                                "consumable_merit_raw": acct.cur_raw - acct.floor_raw,
+                                "min_merit_floor_raw": acct.floor_raw,
+                                "block_height": block_height,
+                                "state_root_hex": format!("{block_height:064x}"),
+                            }
+                        })
+                    }
+                }
+                other => panic!("unexpected RPC method: {other}"),
+            };
+
+            let resp_bytes = serde_json::to_vec(&rpc_resp).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                resp_bytes.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&resp_bytes);
+            let _ = stream.flush();
+        }
+    });
+
+    let state_dir = fresh_state_dir("merit-live-rpc");
+    let mut daemon = spawn_daemon("127.0.0.1:0", &state_dir).expect("spawn faygerd");
+    let addr = daemon.local_addr();
+
+    // Point FayGer to live mock gmc-node via POST /api/v1/merit/config
+    let (cfg_code, cfg_res) = http_json(
+        addr,
+        "POST",
+        "/api/v1/merit/config",
+        Some(&json!({"gmchain_endpoint": format!("http://{gmc_addr}")})),
+    );
+    assert_eq!(cfg_code, 200);
+    assert_eq!(cfg_res["online"], true);
+    assert_eq!(cfg_res["sync_mode"], "gmchain_live_rpc");
+
+    // Create coFay -> registers immediately on mock gmc-node (`cur_merit_raw = 8_000_000`)
+    let (_, cofay) = http_json(
+        addr,
+        "POST",
+        "/api/v1/fays/create",
+        Some(&json!({"kind": "cofay", "name": "ScienceStewardSeat"})),
+    );
+    let inst_id = cofay["instance_id"].as_str().unwrap();
+    assert_eq!(cofay["merit"]["sync_mode"], "gmchain_live_rpc");
+    assert_eq!(cofay["merit"]["cur_merit_raw"], 8_000_000);
+
+    // Activate Faying -> add +45 μ -> consume -15 μ compute_slot_priority
+    let _ = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{inst_id}/faying"),
+        Some(&json!({"grade": "G2"})),
+    );
+    let (add_code, added) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{inst_id}/merit/add"),
+        Some(&json!({
+            "title": "Public Infra Validator Benchmark",
+            "domain_chain_id": "gmc-public-infra",
+            "amount_mu": 45,
+            "horizon_days": 180,
+            "summary": "Live RPC mint verification"
+        })),
+    );
+    assert_eq!(add_code, 200);
+    assert_eq!(added["batch_id"], "gmc_batch_101");
+    assert_eq!(added["cur_merit_raw"], 53_000_000);
+    assert_eq!(added["sync_mode"], "gmchain_live_rpc");
+    let live_floor = added["min_merit_floor_raw"].as_i64().unwrap();
+
+    let (csm_code, consumed) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{inst_id}/merit/consume"),
+        Some(&json!({
+            "priority_kind": "compute_slot_priority",
+            "amount_mu": 15,
+            "reason": "Priority host compute dispatch",
+            "proposal_id": "slot-req-09"
+        })),
+    );
+    assert_eq!(csm_code, 200);
+    assert_eq!(consumed["consumption_id"], "gmc_csm_102");
+    assert_eq!(consumed["before_cur_merit_raw"], 53_000_000);
+    assert_eq!(consumed["after_cur_merit_raw"], 38_000_000);
+    assert_eq!(consumed["min_merit_floor_raw"], live_floor);
+    assert_eq!(consumed["last_block_height"], 102);
+
+    // Over-consuming past live consumable_merit_raw returns 400
+    let (over_live_code, _) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{inst_id}/merit/consume"),
+        Some(&json!({
+            "priority_kind": "voting_priority",
+            "amount_mu": 36,
+            "reason": "Exceeds live consumable pool"
+        })),
+    );
+    assert_eq!(over_live_code, 400);
+
+    let seen = methods_seen.lock().unwrap().clone();
+    assert!(seen.contains(&"gmc_registerExternalFay".to_owned()));
+    assert!(seen.contains(&"gmc_recordContribution".to_owned()));
+    assert!(seen.contains(&"gmc_consumePriority".to_owned()));
+
+    let (_, aud) = http_json(addr, "GET", "/api/v1/audit", None);
+    assert_eq!(aud["verified"], true);
+
+    daemon.shutdown();
+    stop_gmc.store(true, Ordering::SeqCst);
+    let _ = TcpStream::connect(gmc_addr);
+    let _ = gmc_thread.join();
     let _ = fs::remove_dir_all(&state_dir);
 }

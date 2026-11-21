@@ -1,11 +1,12 @@
 //! 内嵌离线可用的 `FayGer Dashboard` 单页可视化控制台（零外部 CDN 依赖）。
 //!
-//! 提供五大核心工作台标签页：
+//! 提供六大核心工作台标签页：
 //! 1. 设备环境与资源池（`Overview & Device Profile`）
 //! 2. 身份与凭据保险箱（`FayID Wallet & Auth Exchange`）
-//! 3. 分身实例与上岗监护（`Running Fays & Faying Monitor` + 红色 `G0` 一键急刹）
+//! 3. 分身实例与上岗监护（`Running Fays & Faying Monitor` + 红色 `G0` 一键急刹 + `MeriToken` 胶囊）
 //! 4. `ICP` 富交互对话与 `CAP` 审批（`ICP Interactive Console`）
 //! 5. 双 `Fay` 心灵感应协作间（`Telepathy (TP) Shared Workspace`）
+//! 6. 美誉值与优先权（`MeriToken & Priority` — `GMChain` 展示、贡献入账与优先权消减闭环）
 
 /// 返回完整的 `FayGer Dashboard` 单页应用 HTML 文本。
 #[must_use]
@@ -256,6 +257,29 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     text-align: left;
     font-family: var(--mono);
   }
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+    margin: 10px 0 14px;
+  }
+  .metric-box {
+    background: #0f172a;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .metric-box .metric-val {
+    font-size: 24px;
+    font-weight: 800;
+    font-family: var(--mono);
+    margin: 4px 0;
+  }
+  .merit-pill {
+    border-color: #38bdf8;
+    color: #7dd3fc;
+    background: rgba(56, 189, 248, 0.12);
+  }
   #toast {
     position: fixed;
     right: 20px;
@@ -277,13 +301,14 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     <div class="brand-logo">FG</div>
     <div>
       <h1>FayGer Local Runtime Console</h1>
-      <small>Multi-Tenant Digital Soul Engine · CAP Host Gatekeeper · ICP (.ctx) · Telepathy (TP)</small>
+      <small>Multi-Tenant Digital Soul Engine · CAP Host Gatekeeper · ICP (.ctx) · Telepathy (TP) · GMChain MeriToken (μ)</small>
     </div>
   </div>
   <div class="status-pills">
     <span class="pill" id="hdr-version">fayger ...</span>
     <span class="pill ok" id="hdr-audit">Audit Chain: verifying...</span>
     <span class="pill" id="hdr-ego">Ego Slot: ...</span>
+    <span class="pill merit-pill" id="hdr-merit">GMChain: ...</span>
     <button class="btn secondary" onclick="refreshAll()">Refresh</button>
   </div>
 </header>
@@ -294,6 +319,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <button data-tab="tab-fays" onclick="switchTab('tab-fays', this)">3. 分身实例与上岗监护 (Running Fays &amp; G0 Brake)</button>
   <button data-tab="tab-icp" onclick="switchTab('tab-icp', this)">4. ICP 富交互对话与 CAP 审批</button>
   <button data-tab="tab-tp" onclick="switchTab('tab-tp', this)">5. 双 Fay 心灵感应协作间 (Telepathy TP)</button>
+  <button id="nav-tab-merit" data-tab="tab-merit" onclick="switchTab('tab-merit', this)">6. 美誉值与优先权 (MeriToken)</button>
 </nav>
 
 <main>
@@ -408,6 +434,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
           <button class="btn secondary" onclick="fillPrompt('/read notes/todo.md')">Routine Read</button>
           <button class="btn secondary" onclick="fillPrompt('/exec workspace.ls')">High-Risk Exec (CAP Hold)</button>
           <button class="btn secondary" onclick="fillPrompt('/camera desk_view')">High-Risk Camera (CAP Hold)</button>
+          <button class="btn secondary" onclick="fillPrompt('查询我的美誉值与投票优先权额度 μ')">Query MeriToken (μ)</button>
         </div>
         <textarea id="chat-input" placeholder="Send message or /write, /read, /exec, /camera..."></textarea>
         <div class="row">
@@ -467,6 +494,110 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       </div>
     </div>
   </section>
+
+  <!-- TAB 6: MeriToken & Priority (GMChain Closed Loop) -->
+  <section id="tab-merit" class="tab-pane">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div class="row">
+          <label class="muted">目标 Fay 实例:</label>
+          <select id="merit-fay-select" onchange="renderMeritTab()"></select>
+          <label class="muted">GMChain RPC (Loopback):</label>
+          <input type="text" id="merit-rpc-ep" value="http://127.0.0.1:8546" style="width:220px" />
+          <button class="btn secondary" onclick="syncGmchainStatus()">同步公誉链状态</button>
+        </div>
+        <div class="row">
+          <span class="pill" id="merit-sync-badge">Local Pocket</span>
+          <span class="pill ok">Non-Monetary · 0 手续费 · 0 转账</span>
+        </div>
+      </div>
+      <div id="merit-rogue-banner" class="ctx-approval" style="display:none;margin-top:10px"></div>
+    </div>
+
+    <!-- Panel A: Display & Present -->
+    <div class="card">
+      <h2>Panel A — 美誉值展示与分级凭证出示 (Display &amp; Present)</h2>
+      <div class="metric-grid" id="merit-metrics-grid"></div>
+      <div class="row">
+        <span class="muted">一键生成可验证美誉凭证 (<code>gmchain-merit-credential/1.0</code>):</span>
+        <button class="btn secondary" onclick="presentMeritCredential('L1_PUBLIC')">L1 全公开明细 (L1_PUBLIC)</button>
+        <button class="btn secondary" onclick="presentMeritCredential('L2_BAND')">L2 段位区间证明 (L2_BAND)</button>
+        <button class="btn secondary" onclick="presentMeritCredential('L3_ZK_BLINDED')">L3 零知识盲化句柄 (L3_ZK_BLINDED)</button>
+      </div>
+      <pre class="code" id="merit-cred-preview" style="display:none"></pre>
+    </div>
+
+    <div class="grid-2">
+      <!-- Panel B: Add MeriToken -->
+      <div class="card">
+        <h2>Panel B — 添加美誉值 (iFay 协作贡献见证入账)</h2>
+        <p class="muted">提交经 <code>Faying</code> 受监护状态的 <code>iFay</code> / <code>coFay</code> 核验贡献，铸造入账活跃美誉值并单调抬升历史底值 <code>minMerit</code>。</p>
+        <div class="row">
+          <label class="muted" style="width:95px">贡献标题:</label>
+          <input type="text" id="merit-add-title" value="开源治理协议基准实现与复现数据集" style="flex:1" />
+        </div>
+        <div class="row">
+          <label class="muted" style="width:95px">领域链 ID:</label>
+          <select id="merit-add-domain">
+            <option value="gmc-open-science">gmc-open-science (开放科学协作链)</option>
+            <option value="gmc-public-infra">gmc-public-infra (公共基础设施链)</option>
+            <option value="gmc-safety-audit">gmc-safety-audit (安全与合规审计链)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="muted" style="width:95px">入账值 +Δμ:</label>
+          <input type="number" id="merit-add-amount" value="40" min="1" step="1" style="width:110px" />
+          <label class="muted">衰减周期:</label>
+          <select id="merit-add-horizon">
+            <option value="30">30 天</option>
+            <option value="90" selected>90 天</option>
+            <option value="180">180 天</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="muted" style="width:95px">贡献摘要:</label>
+          <input type="text" id="merit-add-summary" value="端到端可复现构件与 SHA-256 审计证据已封存" style="flex:1" />
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn ok" onclick="submitMeritAdd()">提交贡献并铸造入账 (+Δμ)</button>
+        </div>
+        <div id="merit-add-feedback" style="margin-top:8px"></div>
+      </div>
+
+      <!-- Panel C: Consume MeriToken -->
+      <div class="card">
+        <h2>Panel C — 消费美誉值 (行使投票优先权 / 服务优先权消减)</h2>
+        <p class="muted">仅从可消费活跃池 <code>(curMerit - minMerit)</code> 中消减；历史贡献底值 <code>minMerit</code> 绝对只增不减、受宪章底值严格保护。</p>
+        <div class="row">
+          <label class="muted" style="width:95px">优先权类型:</label>
+          <select id="merit-consume-kind" style="flex:1">
+            <option value="voting_priority">投票优先权加权表决 (voting_priority)</option>
+            <option value="cofay_service_priority">公共服务 coFay 优先通道 (cofay_service_priority)</option>
+            <option value="compute_slot_priority">宿主稀缺算力优先调度 (compute_slot_priority)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="muted" style="width:95px">关联提案 ID:</label>
+          <input type="text" id="merit-consume-proposal" placeholder="如 prop-001" value="prop-001" style="width:150px" />
+          <label class="muted">消减额度 -Δμ:</label>
+          <input type="number" id="merit-consume-amount" value="12" min="0.1" step="0.5" style="width:110px" />
+        </div>
+        <div class="row">
+          <label class="muted" style="width:95px">用途说明:</label>
+          <input type="text" id="merit-consume-reason" value="对社区协议升级提案行使投票优先权表决" style="flex:1" />
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" onclick="submitMeritConsume()">行使优先权并消减活跃美誉值 (-Δμ)</button>
+        </div>
+        <div id="merit-consume-feedback" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>最近美誉值铸造入账与优先权消减流水 (Recent Merit &amp; Priority Ledger)</h2>
+      <div id="merit-history-box"></div>
+    </div>
+  </section>
 </main>
 
 <div id="toast"></div>
@@ -507,6 +638,7 @@ async function refreshAll() {
     renderFays();
     renderIcpTab();
     renderTpTab();
+    renderMeritTab();
   } catch (e) {
     toast('Error: ' + e.message);
   }
@@ -523,6 +655,10 @@ function renderHeader() {
   const egoEl = document.getElementById('hdr-ego');
   egoEl.textContent = 'Ego: ' + (ego.online ? 'ONLINE (3-in-1)' : 'Standalone Fallback');
   egoEl.className = 'pill ' + (ego.online ? 'ok' : 'warn');
+  const mc = STATE.merit_config || {};
+  const meritEl = document.getElementById('hdr-merit');
+  meritEl.textContent = 'GMChain: ' + (mc.online ? 'Live RPC' : 'Local Pocket');
+  meritEl.className = 'pill ' + (mc.online ? 'ok' : 'merit-pill');
 }
 
 function renderOverview() {
@@ -654,6 +790,7 @@ function renderFays() {
           ${c} ${effSet.has(c) ? '✓' : '✗'}
         </label>
       `).join('');
+      const m = f.merit || { cur_merit_formatted: '5.00', consumable_merit_formatted: '2.28', min_merit_floor_formatted: '2.72' };
       return `
         <div class="fay-card ${isFaying ? 'faying' : 'rogue'}">
           <div class="row" style="justify-content:space-between">
@@ -662,8 +799,10 @@ function renderFays() {
               <span class="pill">${esc(f.kind.toUpperCase())}</span>
               <code class="muted">${esc(f.fay_id)}</code>
               <span class="pill ${isFaying ? 'ok' : 'danger'}">${esc(f.faying_state)}</span>
+              <span class="pill merit-pill">MeriToken: ${esc(m.cur_merit_formatted)} μ (可消减 ${esc(m.consumable_merit_formatted)} μ · 底值 ${esc(m.min_merit_floor_formatted)} μ)</span>
             </div>
             <div class="row">
+              <button class="btn secondary" onclick="jumpToMeritTab('${f.fay_id}')">美誉值与优先权 (Tab 6)</button>
               ${isFaying
                 ? `<button class="btn secondary" onclick="sendHeartbeat('${f.fay_id}')">Heartbeat</button>`
                 : `<button class="btn ok" onclick="activateFaying('${f.fay_id}')">Flip Faying Switch ON (G2)</button>`
@@ -818,6 +957,19 @@ function renderAnnotation(a) {
       </div>
     `;
   }
+  if (a.kind === 'merit_standing_card') {
+    return `
+      <div class="ctx-approval" style="border-color:#38bdf8;background:rgba(56,189,248,0.08)">
+        <div class="row" style="justify-content:space-between;margin:0">
+          <b>MeriToken Standing Card (<code>${esc(a.sync_mode)}</code> · Height #${a.block_height})</b>
+          <button class="btn secondary" onclick="jumpToMeritTab('${esc(a.fay_id)}')">打开 Tab 6</button>
+        </div>
+        <div style="margin-top:4px;font-family:var(--mono);font-size:12px">
+          curMerit: <b>${esc(a.cur_merit_mu)}</b> · 可消费活跃池 (cur - min): <b>${esc(a.consumable_merit_mu)}</b> · 保底 minMerit: <b>${esc(a.min_merit_floor_mu)}</b>
+        </div>
+      </div>
+    `;
+  }
   return '';
 }
 
@@ -909,6 +1061,191 @@ async function closeTp(sessionId) {
   await api(`/api/v1/tp/sessions/${encodeURIComponent(sessionId)}/close`, 'POST', {});
   toast('Closed TP session');
   await refreshAll();
+}
+
+function jumpToMeritTab(fayId) {
+  const btn = document.getElementById('nav-tab-merit');
+  switchTab('tab-merit', btn);
+  const sel = document.getElementById('merit-fay-select');
+  if (sel && fayId) {
+    sel.value = fayId;
+    renderMeritTab();
+  }
+}
+
+function renderMeritTab() {
+  const fays = STATE.fays || [];
+  const sel = document.getElementById('merit-fay-select');
+  const prev = sel.value;
+  sel.innerHTML = fays.map(f => `<option value="${esc(f.fay_id)}">${esc(f.display_name)} (${esc(f.kind.toUpperCase())} · ${esc(f.faying_state)}) — ${esc(f.instance_id)}</option>`).join('');
+  if (prev && fays.some(f => f.fay_id === prev)) sel.value = prev;
+
+  const mc = STATE.merit_config || {};
+  const epInput = document.getElementById('merit-rpc-ep');
+  if (mc.gmchain_endpoint && document.activeElement !== epInput) {
+    epInput.value = mc.gmchain_endpoint;
+  }
+
+  const grid = document.getElementById('merit-metrics-grid');
+  const rogueBanner = document.getElementById('merit-rogue-banner');
+  const histBox = document.getElementById('merit-history-box');
+  const badge = document.getElementById('merit-sync-badge');
+
+  const fay = fays.find(f => f.fay_id === sel.value) || fays[0];
+  if (!fay) {
+    badge.textContent = mc.online ? 'GMChain Live RPC' : 'Local Pocket';
+    badge.className = 'pill ' + (mc.online ? 'ok' : 'warn');
+    rogueBanner.style.display = 'none';
+    grid.innerHTML = '<div class="muted">尚未挂载任何 Fay 实例。请先在 Tab 3 一键创建或加载一个 iFay / coFay！</div>';
+    histBox.innerHTML = '<p class="muted">暂无美誉值流水。</p>';
+    return;
+  }
+
+  const m = fay.merit || {};
+  const isLive = m.sync_mode === 'gmchain_live_rpc';
+  badge.textContent = isLive ? 'GMChain Live RPC' : 'Local Pocket';
+  badge.className = 'pill ' + (isLive ? 'ok' : 'warn');
+
+  if (fay.faying_state !== 'FAYING') {
+    rogueBanner.style.display = 'block';
+    rogueBanner.innerHTML = `
+      <div class="row" style="justify-content:space-between;margin:0">
+        <div>
+          <b>当前分身处于 ROGUE 隔离停机状态</b>：允许只读展示与出示凭证，但<b>添加美誉值 (Add)</b> 与<b>消费优先权 (Consume)</b> 要求先开启 <code>Faying</code> 上岗监护！
+        </div>
+        <button class="btn ok" onclick="activateFaying('${esc(fay.fay_id)}')">一键激活 Faying 上岗监护 (G2)</button>
+      </div>
+    `;
+  } else {
+    rogueBanner.style.display = 'none';
+  }
+
+  const rootShort = (m.last_state_root_hex || '').slice(0, 18);
+  grid.innerHTML = `
+    <div class="metric-box">
+      <div class="muted">当前美誉值 curMerit(t)</div>
+      <div class="metric-val" style="color:#38bdf8">${esc(m.cur_merit_formatted)} μ</div>
+      <div class="muted">raw=${m.cur_merit_raw} (SCALE=10⁶)</div>
+    </div>
+    <div class="metric-box">
+      <div class="muted">可消费活跃池 (curMerit - minMerit)</div>
+      <div class="metric-val" style="color:#10b981">${esc(m.consumable_merit_formatted)} μ</div>
+      <div class="muted">可用于投票/服务/算力优先权消减</div>
+    </div>
+    <div class="metric-box">
+      <div class="muted">历史贡献底值 minMerit (只增不减)</div>
+      <div class="metric-val" style="color:#f59e0b">${esc(m.min_merit_floor_formatted)} μ</div>
+      <div class="muted">初始常数 e ≈ 2.72 μ · 消费绝不触碰底值</div>
+    </div>
+    <div class="metric-box">
+      <div class="muted">最新区块高度 &amp; StateRoot</div>
+      <div class="metric-val">#${m.last_block_height ?? 0}</div>
+      <div class="muted"><code>${esc(rootShort)}…</code></div>
+    </div>
+  `;
+
+  const items = (m.history || []).slice().reverse();
+  if (!items.length) {
+    histBox.innerHTML = '<p class="muted">当前尚无入账或优先权消费记录（初始宪章口袋：5.00 μ，底值 e = 2.72 μ，可消减 2.28 μ）。</p>';
+  } else {
+    histBox.innerHTML = `
+      <table class="kv">
+        <tr><th>单号</th><th>类型</th><th>领域链 / 优先权</th><th>变动 Δμ</th><th>变动后 curMerit</th><th>受保护 minMerit</th><th>高度 / 来源</th><th>说明</th></tr>
+        ${items.map(it => {
+          const isAdd = it.entry_kind === 'contribution_added';
+          const afterMu = (Number(it.after_cur_merit_raw) / 1000000).toFixed(2);
+          const floorMu = (Number(it.min_merit_floor_raw) / 1000000).toFixed(2);
+          return `
+            <tr>
+              <td>${esc(it.record_id)}</td>
+              <td><span class="pill ${isAdd ? 'ok' : 'warn'}">${isAdd ? '贡献铸造入账' : '优先权消减'}</span></td>
+              <td>${esc(it.domain_or_priority)}${it.proposal_id ? ` (<code>${esc(it.proposal_id)}</code>)` : ''}</td>
+              <td><b>${esc(it.delta_formatted)}</b></td>
+              <td>${afterMu} μ</td>
+              <td>${floorMu} μ</td>
+              <td>#${it.block_height} · ${esc(it.source)}</td>
+              <td>${esc(it.title)}</td>
+            </tr>
+          `;
+        }).join('')}
+      </table>
+    `;
+  }
+}
+
+async function syncGmchainStatus() {
+  const gmchain_endpoint = document.getElementById('merit-rpc-ep').value.trim();
+  const fayId = document.getElementById('merit-fay-select').value;
+  try {
+    const cfg = await api('/api/v1/merit/config', 'POST', { gmchain_endpoint });
+    if (fayId) {
+      await api(`/api/v1/fays/${encodeURIComponent(fayId)}/merit`, 'GET');
+    }
+    toast('已同步公誉链配置 (' + cfg.sync_mode + ')');
+    await refreshAll();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function presentMeritCredential(privacy_tier) {
+  const fayId = document.getElementById('merit-fay-select').value;
+  if (!fayId) return toast('请先选择目标 Fay 实例');
+  try {
+    const cred = await api(`/api/v1/fays/${encodeURIComponent(fayId)}/merit/credential`, 'POST', { privacy_tier });
+    const box = document.getElementById('merit-cred-preview');
+    box.style.display = 'block';
+    box.textContent = JSON.stringify(cred, null, 2);
+    toast('已生成 ' + privacy_tier + ' 美誉凭证');
+    await refreshAll();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function submitMeritAdd() {
+  const fayId = document.getElementById('merit-fay-select').value;
+  const fb = document.getElementById('merit-add-feedback');
+  if (!fayId) return toast('请先创建并选择 Fay 实例');
+  const title = document.getElementById('merit-add-title').value;
+  const domain_chain_id = document.getElementById('merit-add-domain').value;
+  const amount_mu = Number(document.getElementById('merit-add-amount').value || 0);
+  const horizon_days = Number(document.getElementById('merit-add-horizon').value || 90);
+  const summary = document.getElementById('merit-add-summary').value;
+  try {
+    const res = await api(`/api/v1/fays/${encodeURIComponent(fayId)}/merit/add`, 'POST', {
+      title, domain_chain_id, amount_mu, horizon_days, summary
+    });
+    fb.innerHTML = `<div class="ctx-approval" style="border-color:var(--ok)"><b>贡献入账成功 (${esc(res.batch_id)})</b>：当前 <code>curMerit = ${esc(res.cur_merit_formatted)} μ</code>，可消费池 <code>${esc(res.consumable_merit_formatted)} μ</code>，保底 <code>minMerit = ${esc(res.min_merit_floor_formatted)} μ</code>。</div>`;
+    toast('贡献已入账 +' + amount_mu + ' μ');
+    await refreshAll();
+  } catch (e) {
+    fb.innerHTML = `<div class="ctx-alert"><b>入账被拦截</b>：${esc(e.message)}</div>`;
+    toast(e.message);
+  }
+}
+
+async function submitMeritConsume() {
+  const fayId = document.getElementById('merit-fay-select').value;
+  const fb = document.getElementById('merit-consume-feedback');
+  if (!fayId) return toast('请先创建并选择 Fay 实例');
+  const priority_kind = document.getElementById('merit-consume-kind').value;
+  const proposal_id = document.getElementById('merit-consume-proposal').value.trim() || null;
+  const amount_mu = Number(document.getElementById('merit-consume-amount').value || 0);
+  const reason = document.getElementById('merit-consume-reason').value;
+  try {
+    const res = await api(`/api/v1/fays/${encodeURIComponent(fayId)}/merit/consume`, 'POST', {
+      priority_kind, amount_mu, reason, proposal_id
+    });
+    const beforeMu = (Number(res.before_cur_merit_raw) / 1000000).toFixed(2);
+    const afterMu = (Number(res.after_cur_merit_raw) / 1000000).toFixed(2);
+    fb.innerHTML = `<div class="ctx-approval" style="border-color:var(--ok)"><b>优先权已生效 (${esc(res.consumption_id)})</b>：<code>curMerit</code> 由 <b>${beforeMu} μ → ${afterMu} μ</b>，历史底值 <code>minMerit = ${esc(res.min_merit_floor_formatted)} μ</code> <b>严格保持不变</b>！</div>`;
+    toast('优先权已行使，消减 -' + amount_mu + ' μ');
+    await refreshAll();
+  } catch (e) {
+    fb.innerHTML = `<div class="ctx-alert"><b>宪章底值保护 / 状态守卫拦截</b>：${esc(e.message)}</div>`;
+    toast(e.message);
+  }
 }
 
 function esc(str) {

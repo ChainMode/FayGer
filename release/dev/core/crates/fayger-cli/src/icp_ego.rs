@@ -99,6 +99,23 @@ pub enum CtxAnnotation {
         /// 详细说明。
         detail: String,
     },
+    /// `MeriToken`（`美誉值`, `μ`）实时账户与可消费优先权状态卡片。
+    MeritStandingCard {
+        /// 所属 `fay_id`。
+        fay_id: String,
+        /// 当前实时美誉值（如 `"45.00 μ"`）。
+        cur_merit_mu: String,
+        /// 可消费活跃池 `curMerit - minMerit`（如 `"38.28 μ"`）。
+        consumable_merit_mu: String,
+        /// 历史贡献保底值 `minMerit`（如 `"6.72 μ"`，只增不减）。
+        min_merit_floor_mu: String,
+        /// 同步模式（`"gmchain_live_rpc"` 或 `"local_pocket_fallback"`）。
+        sync_mode: String,
+        /// 最新公誉链区块高度。
+        block_height: u64,
+        /// 最新状态根十六进制。
+        state_root_hex: String,
+    },
 }
 
 /// `ICP` `.ctx` 多端自适应消息信封。
@@ -194,6 +211,27 @@ pub fn render_ctx_terminal(env: &CtxEnvelope) -> String {
                 detail,
             } => {
                 let _ = writeln!(out, "│ [!{}: {title}] {detail}", level.to_uppercase());
+            }
+            CtxAnnotation::MeritStandingCard {
+                fay_id,
+                cur_merit_mu,
+                consumable_merit_mu,
+                min_merit_floor_mu,
+                sync_mode,
+                block_height,
+                state_root_hex,
+            } => {
+                let short_root = &state_root_hex[..12.min(state_root_hex.len())];
+                let _ = writeln!(
+                    out,
+                    "│ [MERITOKEN STANDING · {sync_mode}] fay={fay_id} height=#{block_height} root={short_root}…"
+                );
+                let _ = writeln!(out, "│   curMerit(t)                : {cur_merit_mu}");
+                let _ = writeln!(
+                    out,
+                    "│   consumable (cur - min)     : {consumable_merit_mu}"
+                );
+                let _ = writeln!(out, "│   minMerit floor (protected) : {min_merit_floor_mu}");
             }
         }
     }
@@ -397,6 +435,17 @@ fn http_post_json(base_endpoint: &str, path: &str, body: &Value) -> Option<Value
     serde_json::from_str(payload.trim()).ok()
 }
 
+/// 判断对话消息是否在询问或提及 `MeriToken`（`美誉` / `merit` / `优先权` / `μ`）。
+#[must_use]
+pub fn message_mentions_merit(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    msg.contains("美誉")
+        || msg.contains("优先权")
+        || msg.contains('μ')
+        || lower.contains("merit")
+        || lower.contains("priority")
+}
+
 fn classify_local_intent(msg: &str) -> &'static str {
     let trimmed = msg.trim();
     if trimmed.starts_with("/write ") || trimmed.contains("fs.write") {
@@ -407,6 +456,8 @@ fn classify_local_intent(msg: &str) -> &'static str {
         "host_process_exec"
     } else if trimmed.starts_with("/camera") || trimmed.contains("camera") {
         "host_camera_snapshot"
+    } else if message_mentions_merit(trimmed) {
+        "merit_standing_query"
     } else if trimmed.contains("tp") || trimmed.contains("telepathy") {
         "tp_collaboration_query"
     } else {
@@ -426,8 +477,8 @@ fn apply_local_redline_guard(draft: &str) -> (String, bool) {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::{
-        render_ctx_terminal, run_ego_three_in_one, CtxAnnotation, CtxEnvelope,
-        ICP_CTX_SCHEMA_VERSION,
+        message_mentions_merit, render_ctx_terminal, run_ego_three_in_one, CtxAnnotation,
+        CtxEnvelope, ICP_CTX_SCHEMA_VERSION,
     };
 
     #[test]
@@ -454,18 +505,38 @@ mod tests {
             faying_state: "FAYING".to_owned(),
             summary_text: ego_res.guarded_reply,
             ego_trace: ego_res.trace,
-            annotations: vec![CtxAnnotation::CapApprovalCard {
-                approval_id: "apr_01".to_owned(),
-                fay_id: "ifay_abcdefabcdefabcdefabcdefab".to_owned(),
-                operation: "process.exec".to_owned(),
-                target: "sandbox.ls".to_owned(),
-                criticality: "high".to_owned(),
-                reason: "High criticality host command requires Human Prime approval".to_owned(),
-                status: "pending".to_owned(),
-            }],
+            annotations: vec![
+                CtxAnnotation::CapApprovalCard {
+                    approval_id: "apr_01".to_owned(),
+                    fay_id: "ifay_abcdefabcdefabcdefabcdefab".to_owned(),
+                    operation: "process.exec".to_owned(),
+                    target: "sandbox.ls".to_owned(),
+                    criticality: "high".to_owned(),
+                    reason: "High criticality host command requires Human Prime approval"
+                        .to_owned(),
+                    status: "pending".to_owned(),
+                },
+                CtxAnnotation::MeritStandingCard {
+                    fay_id: "ifay_abcdefabcdefabcdefabcdefab".to_owned(),
+                    cur_merit_mu: "33.00 μ".to_owned(),
+                    consumable_merit_mu: "26.28 μ".to_owned(),
+                    min_merit_floor_mu: "6.72 μ".to_owned(),
+                    sync_mode: "local_pocket_fallback".to_owned(),
+                    block_height: 2,
+                    state_root_hex:
+                        "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+                            .to_owned(),
+                },
+            ],
         };
         let term = render_ctx_terminal(&env);
         assert!(term.contains("[CAP APPROVAL CARD · pending]"));
         assert!(term.contains("apr_01"));
+        assert!(term.contains("[MERITOKEN STANDING · local_pocket_fallback]"));
+        assert!(term.contains("33.00 μ"));
+        assert!(message_mentions_merit("我的美誉值还有多少？"));
+        assert!(message_mentions_merit("Check my merit standing"));
+        assert!(message_mentions_merit("投票优先权额度"));
+        assert!(message_mentions_merit("Balance in μ"));
     }
 }

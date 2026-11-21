@@ -19,11 +19,20 @@ use crate::ego_package::{encode_hex, hex_sha256, jcs_canonicalize};
 use crate::error::CliError;
 use crate::host_profile::detect_host_environment;
 use crate::icp_ego::{
-    render_ctx_terminal, run_ego_three_in_one, CtxAnnotation, CtxEnvelope, CtxKeyValue,
-    ICP_CTX_SCHEMA_VERSION,
+    message_mentions_merit, render_ctx_terminal, run_ego_three_in_one, CtxAnnotation, CtxEnvelope,
+    CtxKeyValue, ICP_CTX_SCHEMA_VERSION,
 };
 use crate::live_ifay::{
     verify_audit_chain, AuditChainBuilder, HashChainedAuditEntry, GENESIS_PREV_HASH,
+};
+use crate::merit::{
+    build_merit_credential, compute_local_state_root, default_gmchain_endpoint_string,
+    format_merit_2dp, normalize_loopback_gmchain_endpoint, probe_gmchain_online,
+    rpc_consume_priority, rpc_record_contribution, rpc_register_external_fay,
+    validate_priority_kind, MeriTokenPocketState, MeritAddInput, MeritAddReceipt, MeritConfigView,
+    MeritConsumeInput, MeritConsumeReceipt, MeritCredentialPresentation, MeritLedgerEntry,
+    MeritStandingView, DEFAULT_GMCHAIN_ENDPOINT, MERIT_SCALE, MIN_MERIT_E_RAW, SYNC_MODE_LIVE_RPC,
+    SYNC_MODE_LOCAL_FALLBACK,
 };
 use crate::soul::{create_soul_buf_bytes, extract_soul_from_buf, SoulKind, SoulPackageMetadata};
 use crate::wallet::{
@@ -38,6 +47,7 @@ use fayger_loader::load;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -124,6 +134,9 @@ pub struct StoredFayInstance {
     pub chat_history: Vec<ChatTurnRecord>,
     /// 加载时间（Unix 秒）。
     pub loaded_at_unix: u64,
+    /// `MeriToken`（`美誉值`, `μ`）账户与优先权流水口袋（向后兼容旧快照自动初始化）。
+    #[serde(default)]
+    pub merit_pocket: MeriTokenPocketState,
 }
 
 /// 对外（REST API 与 Web 控制台）呈现的单个 `Fay` 实例全貌（含实时交集计算结果）。
@@ -163,6 +176,9 @@ pub struct FayInstanceView {
     pub metadata: SoulPackageMetadata,
     /// 最近对话轮次。
     pub chat_history: Vec<ChatTurnRecord>,
+    /// 实时 `MeriToken`（美誉值 `μ`）与可消费优先权状态全貌。
+    #[serde(default)]
+    pub merit: MeritStandingView,
 }
 
 /// 请求 `CAP` 守门员评估并执行的宿主驱动动作。
@@ -337,12 +353,16 @@ pub struct DashboardSnapshot {
     pub chain_head_hash: String,
     /// 最近审计分录列表。
     pub audit_entries: Vec<HashChainedAuditEntry>,
+    /// 当前本机回环 `GMChain` / `MeriToken` 协同配置状态。
+    pub merit_config: MeritConfigView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedEngineData {
     schema_version: String,
     next_instance_seq: u64,
+    #[serde(default = "default_gmchain_endpoint_string")]
+    gmchain_endpoint: String,
     fays: BTreeMap<String, StoredFayInstance>,
     cap_approvals: BTreeMap<String, CapApprovalItem>,
     tp_sessions: BTreeMap<String, TpSharedSession>,
@@ -354,6 +374,7 @@ impl Default for PersistedEngineData {
         Self {
             schema_version: ENGINE_STATE_SCHEMA_VERSION.to_owned(),
             next_instance_seq: 1,
+            gmchain_endpoint: DEFAULT_GMCHAIN_ENDPOINT.to_owned(),
             fays: BTreeMap::new(),
             cap_approvals: BTreeMap::new(),
             tp_sessions: BTreeMap::new(),
@@ -530,6 +551,22 @@ impl FayGerEngine {
         let instance_id = format!("inst_{seq:04}");
         let fay_id = meta.fay_id.clone();
 
+        let mut merit_pocket = MeriTokenPocketState::initial_for(&fay_id);
+        if let Ok(Some(reg)) = rpc_register_external_fay(
+            &self.data.gmchain_endpoint,
+            &fay_id,
+            &meta.display_name,
+            meta.kind.as_str(),
+        ) {
+            merit_pocket.canonical_fayid = reg.canonical_fayid;
+            merit_pocket.cur_merit_raw = reg.cur_merit_raw;
+            merit_pocket.min_merit_floor_raw = reg.min_merit_floor_raw;
+            merit_pocket.consumable_merit_raw = reg.consumable_merit_raw;
+            merit_pocket.last_block_height = reg.block_height;
+            merit_pocket.last_state_root_hex = reg.state_root_hex;
+            SYNC_MODE_LIVE_RPC.clone_into(&mut merit_pocket.sync_mode);
+        }
+
         let stored = StoredFayInstance {
             instance_id,
             buf_path: source_label.to_owned(),
@@ -544,6 +581,7 @@ impl FayGerEngine {
             sandbox_dir: sandbox_path.display().to_string(),
             chat_history: Vec::new(),
             loaded_at_unix: unix_now_secs(),
+            merit_pocket,
         };
         let view = self.to_instance_view(&stored);
         self.data.fays.insert(fay_id.clone(), stored);
@@ -577,7 +615,7 @@ impl FayGerEngine {
         self.append_audit(
             "fay_policy_updated",
             json!({
-                "fay_id": fay_id,
+                "fay_id": view.fay_id,
                 "policy_capabilities": allowed_capabilities,
                 "effective_capabilities": view.effective_capabilities,
             }),
@@ -627,7 +665,7 @@ impl FayGerEngine {
         self.append_audit(
             "faying_activated",
             json!({
-                "fay_id": fay_id,
+                "fay_id": view.fay_id,
                 "mandate_id": mandate_id,
                 "grade": clean_grade,
                 "ttl_secs": ttl,
@@ -664,6 +702,7 @@ impl FayGerEngine {
         fay_id: &str,
         reason: Option<&str>,
     ) -> Result<FayInstanceView, CliError> {
+        let canonical_id = self.resolve_fay_key(fay_id)?;
         let now = unix_now_secs();
         let brake_reason = reason
             .map(str::trim)
@@ -671,7 +710,7 @@ impl FayGerEngine {
             .unwrap_or("Human Prime triggered G0 Red Emergency Brake");
 
         let revoked_mandate_id = {
-            let stored = self.get_fay_mut(fay_id)?;
+            let stored = self.get_fay_mut(&canonical_id)?;
             let prev_id = stored.active_mandate.take().map(|m| m.mandate_id);
             stored.faying_state = FayingState::Rogue;
             stored.last_rogue_reason = Some(brake_reason.to_owned());
@@ -689,7 +728,7 @@ impl FayGerEngine {
 
         let mut revoked_approvals = Vec::new();
         for item in self.data.cap_approvals.values_mut() {
-            if item.fay_id == fay_id && item.status == "pending" {
+            if item.fay_id == canonical_id && item.status == "pending" {
                 "revoked_g0".clone_into(&mut item.status);
                 item.decided_at_unix = Some(now);
                 revoked_approvals.push(item.approval_id.clone());
@@ -699,7 +738,7 @@ impl FayGerEngine {
         self.append_audit(
             "g0_emergency_brake",
             json!({
-                "fay_id": fay_id,
+                "fay_id": canonical_id,
                 "new_state": "ROGUE",
                 "revoked_mandate_id": revoked_mandate_id,
                 "revoked_pending_approvals": revoked_approvals,
@@ -707,8 +746,17 @@ impl FayGerEngine {
             }),
         )?;
         self.save()?;
-        let stored = self.get_fay(fay_id)?;
+        let stored = self.get_fay(&canonical_id)?;
         Ok(self.to_instance_view(stored))
+    }
+
+    /// 向指定 `Fay` 发送纯对话消息（委托至 [`Self::chat_or_act`]）。
+    pub fn chat_with_fay(
+        &mut self,
+        fay_id: &str,
+        message: &str,
+    ) -> Result<ChatTurnRecord, CliError> {
+        self.chat_or_act(fay_id, message, None)
     }
 
     /// 向指定 `Fay` 发送对话消息或宿主驱动指令，经 `Ego` 三合一与 `CAP` 守门员处理后返回 `.ctx` 信封。
@@ -720,10 +768,15 @@ impl FayGerEngine {
         explicit_action: Option<RequestedHostAction>,
     ) -> Result<ChatTurnRecord, CliError> {
         self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(fay_id)?;
         let clean_msg = message.trim();
         let inferred_action = explicit_action.or_else(|| parse_slash_host_action(clean_msg));
+        let mentions_merit = inferred_action.is_none() && message_mentions_merit(clean_msg);
+        if mentions_merit {
+            let _ = self.sync_single_fay_merit_best_effort(&canonical_id);
+        }
 
-        let stored_snapshot = self.get_fay(fay_id)?.clone();
+        let stored_snapshot = self.get_fay(&canonical_id)?.clone();
         let effective_caps = self.compute_effective_capabilities(&stored_snapshot);
         let ego_endpoint = self.host_pool.ego_endpoint.clone();
         let is_cofay = stored_snapshot.metadata.kind == SoulKind::Cofay;
@@ -733,7 +786,7 @@ impl FayGerEngine {
         {
             self.evaluate_and_run_host_action(&stored_snapshot, &effective_caps, &action)?
         } else {
-            let tp_items = self.collect_tp_context_for_fay(fay_id);
+            let tp_items = self.collect_tp_context_for_fay(&canonical_id);
             let mut rows = vec![
                 CtxKeyValue {
                     key: "faying_state".to_owned(),
@@ -762,18 +815,21 @@ impl FayGerEngine {
                     value: v.clone(),
                 });
             }
-            let draft = format!(
-                    "[{}] Received: \"{}\". Effective capabilities (BuF ∩ HostPool ∩ Policy): [{}]. Shared TP facts visible: {}.",
-                    stored_snapshot.metadata.display_name,
-                    clean_msg,
-                    if effective_caps.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        effective_caps.join(", ")
-                    },
-                    tp_items.len()
-                );
-            let anns = vec![
+            let standing = stored_snapshot
+                .merit_pocket
+                .to_standing_view(&canonical_id, &self.data.gmchain_endpoint);
+            let mut draft = format!(
+                "[{}] Received: \"{}\". Effective capabilities (BuF ∩ HostPool ∩ Policy): [{}]. Shared TP facts visible: {}.",
+                stored_snapshot.metadata.display_name,
+                clean_msg,
+                if effective_caps.is_empty() {
+                    "none".to_owned()
+                } else {
+                    effective_caps.join(", ")
+                },
+                tp_items.len()
+            );
+            let mut anns = vec![
                 CtxAnnotation::StatusBadge {
                     label: "Faying Lifecycle".to_owned(),
                     value: stored_snapshot.faying_state.as_str().to_owned(),
@@ -788,21 +844,41 @@ impl FayGerEngine {
                     rows,
                 },
             ];
+            if mentions_merit {
+                let _ = write!(
+                    draft,
+                    " MeriToken standing: curMerit={} μ, consumable={} μ (curMerit - minMerit), minMerit floor={} μ [{}].",
+                    standing.cur_merit_formatted,
+                    standing.consumable_merit_formatted,
+                    standing.min_merit_floor_formatted,
+                    standing.sync_mode
+                );
+                anns.push(CtxAnnotation::MeritStandingCard {
+                    fay_id: canonical_id.clone(),
+                    cur_merit_mu: format!("{} μ", standing.cur_merit_formatted),
+                    consumable_merit_mu: format!("{} μ", standing.consumable_merit_formatted),
+                    min_merit_floor_mu: format!("{} μ", standing.min_merit_floor_formatted),
+                    sync_mode: standing.sync_mode,
+                    block_height: standing.last_block_height,
+                    state_root_hex: standing.last_state_root_hex,
+                });
+            }
             (
                 draft,
                 anns,
                 "icp_dialogue_turn",
                 json!({
-                    "fay_id": fay_id,
+                    "fay_id": canonical_id,
                     "faying_state": stored_snapshot.faying_state.as_str(),
                     "tp_context_count": tp_items.len(),
+                    "merit_card_attached": mentions_merit,
                 }),
             )
         };
 
         let ego_out = run_ego_three_in_one(
             &ego_endpoint,
-            fay_id,
+            &canonical_id,
             &stored_snapshot.metadata.display_name,
             is_cofay,
             clean_msg,
@@ -815,7 +891,7 @@ impl FayGerEngine {
             schema_version: ICP_CTX_SCHEMA_VERSION.to_owned(),
             message_id: format!("ctx_{}", &encode_hex(&msg_entropy)[..12]),
             timestamp_unix: unix_now_secs(),
-            fay_id: fay_id.to_owned(),
+            fay_id: canonical_id.clone(),
             fay_kind: stored_snapshot.metadata.kind.as_str().to_owned(),
             faying_state: stored_snapshot.faying_state.as_str().to_owned(),
             summary_text: ego_out.guarded_reply,
@@ -834,7 +910,7 @@ impl FayGerEngine {
         };
 
         {
-            let stored_mut = self.get_fay_mut(fay_id)?;
+            let stored_mut = self.get_fay_mut(&canonical_id)?;
             stored_mut.chat_history.push(turn.clone());
         }
         self.append_audit(audit_stage, audit_detail)?;
@@ -1192,6 +1268,519 @@ impl FayGerEngine {
         )
     }
 
+    /// 返回当前 `GMChain` / `MeriToken` 端点配置与在线探测状态。
+    #[must_use]
+    pub fn merit_config(&self) -> MeritConfigView {
+        let online = probe_gmchain_online(&self.data.gmchain_endpoint);
+        MeritConfigView {
+            gmchain_endpoint: self.data.gmchain_endpoint.clone(),
+            rpc_url: format!("{}/rpc", self.data.gmchain_endpoint),
+            online,
+            sync_mode: if online {
+                SYNC_MODE_LIVE_RPC.to_owned()
+            } else {
+                SYNC_MODE_LOCAL_FALLBACK.to_owned()
+            },
+            synced_fays: self.data.fays.len(),
+        }
+    }
+
+    /// 更新回环 `GMChain` JSON-RPC 端点（强制仅允许 `127.0.0.1` / `localhost`）并触发全部已挂载 `Fay` 同步。
+    pub fn update_merit_config(
+        &mut self,
+        gmchain_endpoint: Option<&str>,
+    ) -> Result<MeritConfigView, CliError> {
+        self.enforce_liveness()?;
+        if let Some(raw_ep) = gmchain_endpoint.map(str::trim).filter(|s| !s.is_empty()) {
+            let normalized = normalize_loopback_gmchain_endpoint(raw_ep)?;
+            self.data.gmchain_endpoint = normalized;
+        }
+        let ids: Vec<String> = self.data.fays.keys().cloned().collect();
+        let mut live_synced = 0usize;
+        for id in &ids {
+            if self.sync_single_fay_merit_best_effort(id) {
+                live_synced = live_synced.saturating_add(1);
+            }
+        }
+        let online = live_synced > 0 || probe_gmchain_online(&self.data.gmchain_endpoint);
+        let sync_mode = if online {
+            SYNC_MODE_LIVE_RPC.to_owned()
+        } else {
+            SYNC_MODE_LOCAL_FALLBACK.to_owned()
+        };
+        self.append_audit(
+            "merit.config_updated",
+            json!({
+                "gmchain_endpoint": self.data.gmchain_endpoint,
+                "online": online,
+                "synced_fays": ids.len(),
+            }),
+        )?;
+        self.save()?;
+        Ok(MeritConfigView {
+            gmchain_endpoint: self.data.gmchain_endpoint.clone(),
+            rpc_url: format!("{}/rpc", self.data.gmchain_endpoint),
+            online,
+            sync_mode,
+            synced_fays: ids.len(),
+        })
+    }
+
+    /// 查询并（在 `GMChain` 在线时）实时同步单个 `Fay` 的 `MeriToken` 账户视图（`ROGUE` 与 `FAYING` 均允许查看）。
+    pub fn get_fay_merit(&mut self, id_or_instance: &str) -> Result<MeritStandingView, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+        let changed = self.sync_single_fay_merit_best_effort(&canonical_id);
+        if changed {
+            self.save()?;
+        }
+        let stored = self.get_fay(&canonical_id)?;
+        Ok(stored
+            .merit_pocket
+            .to_standing_view(&canonical_id, &self.data.gmchain_endpoint))
+    }
+
+    /// 为处于 `FAYING` 受监护状态的 `Fay` 提交协作贡献见证并入账 `MeriToken`（`ROGUE` 状态严格 `403` 拦截）。
+    #[allow(clippy::too_many_lines)]
+    pub fn add_fay_merit(
+        &mut self,
+        id_or_instance: &str,
+        input: &MeritAddInput,
+    ) -> Result<MeritAddReceipt, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+        let stored_snapshot = self.get_fay(&canonical_id)?.clone();
+
+        if stored_snapshot.faying_state != FayingState::Faying {
+            return Err(CliError::Failure(FaygerError::new(
+                ErrorCode::AdpCapabilityDenied,
+                Layer::Runtime,
+                format!(
+                    "Fay '{canonical_id}' is in ROGUE state; Human Prime must switch Faying ON before adding MeriToken contributions"
+                ),
+            )));
+        }
+
+        let clean_title = input.title.trim();
+        if clean_title.is_empty() {
+            return Err(CliError::Usage(
+                "merit/add requires non-empty 'title'".to_owned(),
+            ));
+        }
+        if input.amount_mu <= 0 {
+            return Err(CliError::Usage(
+                "merit/add requires positive 'amount_mu' (> 0)".to_owned(),
+            ));
+        }
+        let clean_domain = if input.domain_chain_id.trim().is_empty() {
+            "gmc-open-science".to_owned()
+        } else {
+            input.domain_chain_id.trim().to_owned()
+        };
+        let clean_horizon = input.horizon_days.max(1);
+        let clean_summary = if input.summary.trim().is_empty() {
+            clean_title.to_owned()
+        } else {
+            input.summary.trim().to_owned()
+        };
+        let normalized_input = MeritAddInput {
+            title: clean_title.to_owned(),
+            domain_chain_id: clean_domain.clone(),
+            amount_mu: input.amount_mu,
+            horizon_days: clean_horizon,
+            summary: clean_summary,
+        };
+
+        let added_mu_raw = i128::from(normalized_input.amount_mu).saturating_mul(MERIT_SCALE);
+        let before_cur = stored_snapshot.merit_pocket.cur_merit_raw;
+
+        let rpc_res = rpc_record_contribution(
+            &self.data.gmchain_endpoint,
+            &canonical_id,
+            &stored_snapshot.metadata.display_name,
+            stored_snapshot.metadata.kind.as_str(),
+            &normalized_input,
+        )?;
+
+        let (batch_id, after_cur, after_floor, after_consumable, block_height, state_root_hex, src) =
+            if let Some(live) = rpc_res {
+                let floor = live
+                    .min_merit_floor_raw
+                    .max(stored_snapshot.merit_pocket.min_merit_floor_raw)
+                    .max(MIN_MERIT_E_RAW);
+                let consumable = (live.cur_merit_raw - floor).max(0);
+                (
+                    live.batch_id,
+                    live.cur_merit_raw,
+                    floor,
+                    consumable,
+                    live.block_height,
+                    live.state_root_hex,
+                    SYNC_MODE_LIVE_RPC.to_owned(),
+                )
+            } else {
+                let next_cur = before_cur.saturating_add(added_mu_raw);
+                let floor_accrual = added_mu_raw / 10;
+                let next_floor = stored_snapshot
+                    .merit_pocket
+                    .min_merit_floor_raw
+                    .max(MIN_MERIT_E_RAW)
+                    .saturating_add(floor_accrual);
+                let next_consumable = (next_cur - next_floor).max(0);
+                let next_height = stored_snapshot
+                    .merit_pocket
+                    .last_block_height
+                    .saturating_add(1);
+                let next_root =
+                    compute_local_state_root(&canonical_id, next_cur, next_floor, next_height);
+                let bid = format!("batch_{}", &encode_hex(&fresh_entropy_32())[..12]);
+                (
+                    bid,
+                    next_cur,
+                    next_floor,
+                    next_consumable,
+                    next_height,
+                    next_root,
+                    SYNC_MODE_LOCAL_FALLBACK.to_owned(),
+                )
+            };
+
+        let ledger_item = MeritLedgerEntry {
+            record_id: batch_id.clone(),
+            entry_kind: "contribution_added".to_owned(),
+            title: normalized_input.title.clone(),
+            domain_or_priority: clean_domain.clone(),
+            proposal_id: None,
+            horizon_days: Some(clean_horizon),
+            delta_mu_raw: added_mu_raw,
+            delta_formatted: format!("+{} μ", format_merit_2dp(added_mu_raw)),
+            before_cur_merit_raw: before_cur,
+            after_cur_merit_raw: after_cur,
+            min_merit_floor_raw: after_floor,
+            consumable_merit_raw: after_consumable,
+            source: src.clone(),
+            block_height,
+            timestamp_unix: unix_now_secs(),
+        };
+
+        let standing = {
+            let endpoint = self.data.gmchain_endpoint.clone();
+            let stored_mut = self.get_fay_mut(&canonical_id)?;
+            stored_mut.pending_sync_deltas = stored_mut.pending_sync_deltas.saturating_add(1);
+            stored_mut.merit_pocket.cur_merit_raw = after_cur;
+            stored_mut.merit_pocket.min_merit_floor_raw = after_floor;
+            stored_mut.merit_pocket.consumable_merit_raw = after_consumable;
+            stored_mut.merit_pocket.last_block_height = block_height;
+            stored_mut
+                .merit_pocket
+                .last_state_root_hex
+                .clone_from(&state_root_hex);
+            stored_mut.merit_pocket.sync_mode.clone_from(&src);
+            stored_mut.merit_pocket.history.push(ledger_item);
+            stored_mut
+                .merit_pocket
+                .to_standing_view(&canonical_id, &endpoint)
+        };
+
+        self.append_audit(
+            "merit.contribution_added",
+            json!({
+                "fay_id": canonical_id,
+                "batch_id": batch_id,
+                "domain_chain_id": clean_domain,
+                "added_mu_raw": added_mu_raw,
+                "cur_merit_raw": after_cur,
+                "min_merit_floor_raw": after_floor,
+                "consumable_merit_raw": after_consumable,
+                "source": src,
+                "block_height": block_height,
+                "state_root_hex": state_root_hex,
+            }),
+        )?;
+        self.save()?;
+
+        Ok(MeritAddReceipt {
+            batch_id,
+            added_mu_raw,
+            block_height,
+            state_root_hex,
+            standing,
+        })
+    }
+
+    /// 为处于 `FAYING` 受监护状态的 `Fay` 行使优先权并消减可消费活跃美誉值（严格保护 `minMerit` 底值不变！）。
+    #[allow(clippy::too_many_lines)]
+    pub fn consume_fay_merit(
+        &mut self,
+        id_or_instance: &str,
+        input: &MeritConsumeInput,
+    ) -> Result<MeritConsumeReceipt, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+
+        {
+            let stored = self.get_fay(&canonical_id)?;
+            if stored.faying_state != FayingState::Faying {
+                return Err(CliError::Failure(FaygerError::new(
+                    ErrorCode::AdpCapabilityDenied,
+                    Layer::Runtime,
+                    format!(
+                        "Fay '{canonical_id}' is in ROGUE state; Human Prime must switch Faying ON before exercising MeriToken priority rights"
+                    ),
+                )));
+            }
+        }
+
+        let priority_kind = validate_priority_kind(&input.priority_kind)?;
+        if input.amount_raw <= 0 {
+            return Err(CliError::Usage(
+                "merit/consume requires positive 'amount_mu' (> 0)".to_owned(),
+            ));
+        }
+
+        // 若本地尚未与在线公誉链对齐且请求额超过当前本地缓存，先执行一次链上同步核实最新余额。
+        {
+            let pocket = &self.get_fay(&canonical_id)?.merit_pocket;
+            let cur_consumable = (pocket.cur_merit_raw - pocket.min_merit_floor_raw).max(0);
+            if input.amount_raw > cur_consumable && pocket.sync_mode != SYNC_MODE_LIVE_RPC {
+                let _ = self.sync_single_fay_merit_best_effort(&canonical_id);
+            }
+        }
+
+        let stored_snapshot = self.get_fay(&canonical_id)?.clone();
+        let preserved_floor = stored_snapshot
+            .merit_pocket
+            .min_merit_floor_raw
+            .max(MIN_MERIT_E_RAW);
+        let available_consumable =
+            (stored_snapshot.merit_pocket.cur_merit_raw - preserved_floor).max(0);
+
+        if input.amount_raw > available_consumable {
+            return Err(CliError::Usage(format!(
+                "requested priority consumption {} μ exceeds consumable active pool {} μ (curMerit={} μ - minMerit floor={} μ); constitutional minMerit floor is strictly protected",
+                format_merit_2dp(input.amount_raw),
+                format_merit_2dp(available_consumable),
+                format_merit_2dp(stored_snapshot.merit_pocket.cur_merit_raw),
+                format_merit_2dp(preserved_floor),
+            )));
+        }
+
+        let clean_reason = if input.reason.trim().is_empty() {
+            format!("Exercise {priority_kind}")
+        } else {
+            input.reason.trim().to_owned()
+        };
+        let clean_proposal = input
+            .proposal_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+
+        let normalized_req = MeritConsumeInput {
+            priority_kind: priority_kind.clone(),
+            amount_raw: input.amount_raw,
+            amount_mu_wire: input.amount_mu_wire.clone(),
+            reason: clean_reason.clone(),
+            proposal_id: clean_proposal.clone(),
+        };
+
+        let rpc_res =
+            rpc_consume_priority(&self.data.gmchain_endpoint, &canonical_id, &normalized_req)?;
+
+        let (
+            consumption_id,
+            consumed_mu_raw,
+            before_cur,
+            after_cur,
+            after_floor,
+            after_consumable,
+            block_height,
+            state_root_hex,
+            src,
+        ) = if let Some(live) = rpc_res {
+            // 宪章底值铁律：消费操作绝不允许令 minMerit 下降！
+            let floor = live.min_merit_floor_raw.max(preserved_floor);
+            if live.after_cur_merit_raw < floor {
+                return Err(CliError::Usage(
+                    "GMChain RPC response violated minMerit constitutional floor".to_owned(),
+                ));
+            }
+            let consumable = (live.after_cur_merit_raw - floor).max(0);
+            (
+                live.consumption_id,
+                live.consumed_mu_raw,
+                live.before_cur_merit_raw,
+                live.after_cur_merit_raw,
+                floor,
+                consumable,
+                live.block_height,
+                live.state_root_hex,
+                SYNC_MODE_LIVE_RPC.to_owned(),
+            )
+        } else {
+            let before = stored_snapshot.merit_pocket.cur_merit_raw;
+            let after = before - input.amount_raw;
+            let next_consumable = (after - preserved_floor).max(0);
+            let next_height = stored_snapshot
+                .merit_pocket
+                .last_block_height
+                .saturating_add(1);
+            let next_root =
+                compute_local_state_root(&canonical_id, after, preserved_floor, next_height);
+            let cid = format!("csm_{}", &encode_hex(&fresh_entropy_32())[..12]);
+            (
+                cid,
+                input.amount_raw,
+                before,
+                after,
+                preserved_floor,
+                next_consumable,
+                next_height,
+                next_root,
+                SYNC_MODE_LOCAL_FALLBACK.to_owned(),
+            )
+        };
+
+        let ledger_item = MeritLedgerEntry {
+            record_id: consumption_id.clone(),
+            entry_kind: "priority_consumed".to_owned(),
+            title: clean_reason.clone(),
+            domain_or_priority: priority_kind.clone(),
+            proposal_id: clean_proposal.clone(),
+            horizon_days: None,
+            delta_mu_raw: -consumed_mu_raw,
+            delta_formatted: format!("-{} μ", format_merit_2dp(consumed_mu_raw)),
+            before_cur_merit_raw: before_cur,
+            after_cur_merit_raw: after_cur,
+            min_merit_floor_raw: after_floor,
+            consumable_merit_raw: after_consumable,
+            source: src.clone(),
+            block_height,
+            timestamp_unix: unix_now_secs(),
+        };
+
+        let standing = {
+            let endpoint = self.data.gmchain_endpoint.clone();
+            let stored_mut = self.get_fay_mut(&canonical_id)?;
+            stored_mut.pending_sync_deltas = stored_mut.pending_sync_deltas.saturating_add(1);
+            stored_mut.merit_pocket.cur_merit_raw = after_cur;
+            stored_mut.merit_pocket.min_merit_floor_raw = after_floor;
+            stored_mut.merit_pocket.consumable_merit_raw = after_consumable;
+            stored_mut.merit_pocket.last_block_height = block_height;
+            stored_mut
+                .merit_pocket
+                .last_state_root_hex
+                .clone_from(&state_root_hex);
+            stored_mut.merit_pocket.sync_mode.clone_from(&src);
+            stored_mut.merit_pocket.history.push(ledger_item);
+            stored_mut
+                .merit_pocket
+                .to_standing_view(&canonical_id, &endpoint)
+        };
+
+        self.append_audit(
+            "merit.priority_consumed",
+            json!({
+                "fay_id": canonical_id,
+                "consumption_id": consumption_id,
+                "priority_kind": priority_kind,
+                "proposal_id": clean_proposal,
+                "consumed_mu_raw": consumed_mu_raw,
+                "before_cur_merit_raw": before_cur,
+                "after_cur_merit_raw": after_cur,
+                "min_merit_floor_raw": after_floor,
+                "consumable_merit_raw": after_consumable,
+                "source": src,
+                "block_height": block_height,
+                "state_root_hex": state_root_hex,
+            }),
+        )?;
+        self.save()?;
+
+        Ok(MeritConsumeReceipt {
+            consumption_id,
+            priority_kind,
+            proposal_id: clean_proposal,
+            reason: clean_reason,
+            consumed_mu_raw,
+            before_cur_merit_raw: before_cur,
+            after_cur_merit_raw: after_cur,
+            block_height,
+            state_root_hex,
+            standing,
+        })
+    }
+
+    /// 生成 `L1_PUBLIC` / `L2_BAND` / `L3_ZK_BLINDED` 分级美誉出示凭证并写入防篡改审计链。
+    pub fn present_fay_merit_credential(
+        &mut self,
+        id_or_instance: &str,
+        privacy_tier: &str,
+    ) -> Result<MeritCredentialPresentation, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+        let _ = self.sync_single_fay_merit_best_effort(&canonical_id);
+
+        let (standing, display_name) = {
+            let stored = self.get_fay(&canonical_id)?;
+            (
+                stored
+                    .merit_pocket
+                    .to_standing_view(&canonical_id, &self.data.gmchain_endpoint),
+                stored.metadata.display_name.clone(),
+            )
+        };
+        let cred = build_merit_credential(&standing, &display_name, privacy_tier)?;
+
+        self.append_audit(
+            "merit.credential_presented",
+            json!({
+                "fay_id": canonical_id,
+                "credential_id": cred.credential_id,
+                "privacy_tier": cred.privacy_tier,
+                "commitment_sha256": cred.commitment_sha256,
+                "block_height": cred.block_height,
+            }),
+        )?;
+        self.save()?;
+        Ok(cred)
+    }
+
+    fn sync_single_fay_merit_best_effort(&mut self, canonical_fay_id: &str) -> bool {
+        let Some(stored) = self.data.fays.get(canonical_fay_id) else {
+            return false;
+        };
+        let display_name = stored.metadata.display_name.clone();
+        let kind_str = stored.metadata.kind.as_str().to_owned();
+        let endpoint = self.data.gmchain_endpoint.clone();
+
+        if let Ok(Some(reg)) =
+            rpc_register_external_fay(&endpoint, canonical_fay_id, &display_name, &kind_str)
+        {
+            if let Some(slot) = self.data.fays.get_mut(canonical_fay_id) {
+                slot.merit_pocket.canonical_fayid = reg.canonical_fayid;
+                slot.merit_pocket.cur_merit_raw = reg.cur_merit_raw;
+                slot.merit_pocket.min_merit_floor_raw = reg
+                    .min_merit_floor_raw
+                    .max(slot.merit_pocket.min_merit_floor_raw)
+                    .max(MIN_MERIT_E_RAW);
+                slot.merit_pocket.consumable_merit_raw = (slot.merit_pocket.cur_merit_raw
+                    - slot.merit_pocket.min_merit_floor_raw)
+                    .max(0);
+                slot.merit_pocket.last_block_height = reg.block_height;
+                slot.merit_pocket.last_state_root_hex = reg.state_root_hex;
+                SYNC_MODE_LIVE_RPC.clone_into(&mut slot.merit_pocket.sync_mode);
+            }
+            true
+        } else {
+            if let Some(slot) = self.data.fays.get_mut(canonical_fay_id) {
+                SYNC_MODE_LOCAL_FALLBACK.clone_into(&mut slot.merit_pocket.sync_mode);
+            }
+            false
+        }
+    }
+
     /// 组装供控制台渲染的全量 [`DashboardSnapshot`]。
     pub fn snapshot(&mut self, probe_ego_network: bool) -> Result<DashboardSnapshot, CliError> {
         self.enforce_liveness()?;
@@ -1210,6 +1799,17 @@ impl FayGerEngine {
             .audit_entries
             .last()
             .map_or_else(|| GENESIS_PREV_HASH.to_owned(), |e| e.entry_hash.clone());
+        let merit_config = if probe_ego_network {
+            self.merit_config()
+        } else {
+            MeritConfigView {
+                gmchain_endpoint: self.data.gmchain_endpoint.clone(),
+                rpc_url: format!("{}/rpc", self.data.gmchain_endpoint),
+                online: false,
+                sync_mode: SYNC_MODE_LOCAL_FALLBACK.to_owned(),
+                synced_fays: fays.len(),
+            }
+        };
 
         Ok(DashboardSnapshot {
             fayger_version: crate::FAYGER_VERSION.to_owned(),
@@ -1222,6 +1822,7 @@ impl FayGerEngine {
             audit_chain_verified: verified,
             chain_head_hash: head,
             audit_entries: self.data.audit_entries.clone(),
+            merit_config,
         })
     }
 
@@ -1477,6 +2078,9 @@ impl FayGerEngine {
             sandbox_dir: stored.sandbox_dir.clone(),
             metadata: stored.metadata.clone(),
             chat_history: stored.chat_history.clone(),
+            merit: stored
+                .merit_pocket
+                .to_standing_view(&stored.metadata.fay_id, &self.data.gmchain_endpoint),
         }
     }
 
@@ -1522,22 +2126,44 @@ impl FayGerEngine {
         }
     }
 
-    fn get_fay(&self, fay_id: &str) -> Result<&StoredFayInstance, CliError> {
-        self.data.fays.get(fay_id).ok_or_else(|| {
+    fn resolve_fay_key(&self, id_or_instance: &str) -> Result<String, CliError> {
+        let trimmed = id_or_instance.trim();
+        if self.data.fays.contains_key(trimmed) {
+            return Ok(trimmed.to_owned());
+        }
+        if let Some((fay_id, _)) = self
+            .data
+            .fays
+            .iter()
+            .find(|(_, stored)| stored.instance_id == trimmed)
+        {
+            return Ok(fay_id.clone());
+        }
+        Err(CliError::Failure(FaygerError::new(
+            ErrorCode::FmValidationFailed,
+            Layer::Runtime,
+            format!("Fay instance '{trimmed}' is not loaded in FayGer"),
+        )))
+    }
+
+    fn get_fay(&self, id_or_instance: &str) -> Result<&StoredFayInstance, CliError> {
+        let key = self.resolve_fay_key(id_or_instance)?;
+        self.data.fays.get(&key).ok_or_else(|| {
             CliError::Failure(FaygerError::new(
                 ErrorCode::FmValidationFailed,
                 Layer::Runtime,
-                format!("Fay instance '{fay_id}' is not loaded in FayGer"),
+                format!("Fay instance '{id_or_instance}' is not loaded in FayGer"),
             ))
         })
     }
 
-    fn get_fay_mut(&mut self, fay_id: &str) -> Result<&mut StoredFayInstance, CliError> {
-        self.data.fays.get_mut(fay_id).ok_or_else(|| {
+    fn get_fay_mut(&mut self, id_or_instance: &str) -> Result<&mut StoredFayInstance, CliError> {
+        let key = self.resolve_fay_key(id_or_instance)?;
+        self.data.fays.get_mut(&key).ok_or_else(|| {
             CliError::Failure(FaygerError::new(
                 ErrorCode::FmValidationFailed,
                 Layer::Runtime,
-                format!("Fay instance '{fay_id}' is not loaded in FayGer"),
+                format!("Fay instance '{id_or_instance}' is not loaded in FayGer"),
             ))
         })
     }
@@ -1916,6 +2542,107 @@ mod tests {
         let (_, chain_ok) = engine.audit_log();
         assert!(chain_ok, "SHA-256 audit chain must remain tamper-evident");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enforces_meritoken_faying_guard_floor_protection_and_icp_ctx_card() {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("fayger-merit-test-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut engine = FayGerEngine::open(&dir).expect("open engine");
+
+        // Point gmchain_endpoint to a guaranteed closed loopback port so local fallback is deterministic.
+        let closed_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let closed_port = closed_listener.local_addr().expect("addr").port();
+        drop(closed_listener);
+        engine
+            .update_merit_config(Some(&format!("http://127.0.0.1:{closed_port}")))
+            .expect("update merit config");
+
+        let ifay = engine
+            .create_and_load_soul(SoulKind::Ifay, "MeritAlice", None)
+            .expect("create ifay");
+        assert_eq!(ifay.merit.cur_merit_raw, 5_000_000);
+        assert_eq!(ifay.merit.min_merit_floor_raw, 2_718_281);
+        assert_eq!(ifay.merit.consumable_merit_raw, 2_281_719);
+
+        // ROGUE allows viewing merit via both fay_id and instance_id, but rejects add & consume.
+        let standing_in_rogue = engine
+            .get_fay_merit(&ifay.instance_id)
+            .expect("view in rogue");
+        assert_eq!(standing_in_rogue.cur_merit_raw, 5_000_000);
+        assert!(engine
+            .add_fay_merit(
+                &ifay.instance_id,
+                &crate::merit::MeritAddInput {
+                    title: "Blocked in Rogue".to_owned(),
+                    domain_chain_id: "gmc-open-science".to_owned(),
+                    amount_mu: 40,
+                    horizon_days: 90,
+                    summary: "Should fail".to_owned(),
+                }
+            )
+            .is_err());
+
+        // Switch Faying ON -> add +40 μ -> consume -12 μ voting_priority
+        engine
+            .activate_faying(&ifay.instance_id, Some("G2"), Some(600), Some(120))
+            .expect("activate faying");
+        let added = engine
+            .add_fay_merit(
+                &ifay.instance_id,
+                &crate::merit::MeritAddInput {
+                    title: "Open Protocol Verification".to_owned(),
+                    domain_chain_id: "gmc-open-science".to_owned(),
+                    amount_mu: 40,
+                    horizon_days: 90,
+                    summary: "Verified dataset".to_owned(),
+                },
+            )
+            .expect("add merit");
+        assert_eq!(added.standing.cur_merit_raw, 45_000_000);
+        let floor_before_consume = added.standing.min_merit_floor_raw;
+
+        let consumed = engine
+            .consume_fay_merit(
+                &ifay.instance_id,
+                &crate::merit::MeritConsumeInput {
+                    priority_kind: "voting_priority".to_owned(),
+                    amount_raw: 12_000_000,
+                    amount_mu_wire: "12".to_owned(),
+                    reason: "Weighted vote on prop-001".to_owned(),
+                    proposal_id: Some("prop-001".to_owned()),
+                },
+            )
+            .expect("consume merit");
+        assert_eq!(consumed.after_cur_merit_raw, 33_000_000);
+        assert_eq!(consumed.standing.min_merit_floor_raw, floor_before_consume);
+
+        // Over-consuming past (curMerit - minMerit) is rejected!
+        assert!(engine
+            .consume_fay_merit(
+                &ifay.instance_id,
+                &crate::merit::MeritConsumeInput {
+                    priority_kind: "voting_priority".to_owned(),
+                    amount_raw: 31_000_000,
+                    amount_mu_wire: "31".to_owned(),
+                    reason: "Attempt to dip into minMerit floor".to_owned(),
+                    proposal_id: None,
+                },
+            )
+            .is_err());
+
+        // Chat mentioning 美誉 / μ attaches MeritStandingCard in ICP .ctx
+        let chat = engine
+            .chat_with_fay(&ifay.fay_id, "查询我的美誉值与优先权额度 μ")
+            .expect("chat with merit");
+        assert!(chat.terminal_text.contains("MERITOKEN STANDING"));
+        assert!(chat.terminal_text.contains("33.00 μ"));
+
+        let (_, verified) = engine.audit_log();
+        assert!(verified);
         let _ = fs::remove_dir_all(&dir);
     }
 }
