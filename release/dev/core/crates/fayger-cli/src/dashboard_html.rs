@@ -314,10 +314,10 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 </header>
 
 <nav class="tabs">
-  <button class="active" data-tab="tab-overview" onclick="switchTab('tab-overview', this)">1. 设备环境与资源池 (Overview)</button>
+  <button class="active" data-tab="tab-overview" onclick="switchTab('tab-overview', this)">1. 系统权限与设备环境与资源池 (OS &amp; Host Pool)</button>
   <button data-tab="tab-wallet" onclick="switchTab('tab-wallet', this)">2. 身份与凭据保险箱 (FayID Wallet)</button>
-  <button data-tab="tab-fays" onclick="switchTab('tab-fays', this)">3. 分身实例与上岗监护 (Running Fays &amp; G0 Brake)</button>
-  <button data-tab="tab-icp" onclick="switchTab('tab-icp', this)">4. ICP 富交互对话与 CAP 审批</button>
+  <button id="nav-tab-fays" data-tab="tab-fays" onclick="switchTab('tab-fays', this)">3. 分身实例、大脑配置与上岗监护 (G0 一键急刹)</button>
+  <button data-tab="tab-icp" onclick="switchTab('tab-icp', this)">4. ICP 富交互对话与 CAP 审批 · 终端软硬件操控</button>
   <button data-tab="tab-tp" onclick="switchTab('tab-tp', this)">5. 双 Fay 心灵感应协作间 (Telepathy TP)</button>
   <button id="nav-tab-merit" data-tab="tab-merit" onclick="switchTab('tab-merit', this)">6. 美誉值与优先权 (MeriToken)</button>
 </nav>
@@ -345,6 +345,13 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
         <p class="muted">终端切片附体（Partial Embodiment）协商所提交的标准环境描述文件：</p>
         <pre class="code" id="device-profile-json">{}</pre>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>OS 原生权限探针与一键申请面板 (Native OS Permissions &amp; Privacy Gate)</h2>
+      <p class="muted">实时探测宿主操作系统剪贴板、通知中心、电池/硬件传感器、语音播报、屏幕录制、桌面应用唤起与摄像头/麦克风就绪状态。绝不绕过系统门禁：可一键触发合法系统探测或直达系统隐私设置页授权，并自动纳入本机 <code>HostResourcePool</code>。</p>
+      <div id="os-permissions-feedback" style="margin-bottom:8px"></div>
+      <div id="os-permissions-box"></div>
     </div>
   </section>
 
@@ -411,6 +418,86 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       </div>
     </div>
 
+    <div class="card">
+      <h2>配置大脑：Ego 与外部大模型 (Per-iFay External LLM &amp; Ego Brain Config)</h2>
+      <p class="muted">为选定分身绑定本地 <code>Ego</code>（快直觉路由 + 人格红线注入 + 输出脱敏守卫）与外部大模型（支持本机 Ollama、OpenAI、DeepSeek、Gemini、Anthropic）。API Key 自动加密封存入本机 <code>FayID</code> 保险箱，绝不明文落盘或回传前端。</p>
+      <div class="row">
+        <label class="muted">目标 Fay:</label>
+        <select id="brain-fay-select" onchange="loadSelectedFayBrainIntoForm()"></select>
+        <label class="muted">一键预设:</label>
+        <select id="brain-preset" onchange="applyBrainPreset(this.value)">
+          <option value="">-- 选择模型服务商预设 --</option>
+          <option value="ollama">Ollama 本机免费模型 (127.0.0.1:11434 · qwen2.5:7b)</option>
+          <option value="openai">OpenAI Compatible (api.openai.com · gpt-4o-mini)</option>
+          <option value="deepseek">DeepSeek (api.deepseek.com · deepseek-chat)</option>
+          <option value="gemini">Google Gemini (generativelanguage.googleapis.com · gemini-2.5-flash)</option>
+          <option value="anthropic">Anthropic Claude (api.anthropic.com · claude-3-5-sonnet-latest)</option>
+        </select>
+        <span class="pill" id="brain-apikey-badge">API Key: 未配置</span>
+      </div>
+      <div class="grid-2" style="margin-top:8px">
+        <div class="fay-card" style="margin-bottom:0">
+          <h3>External LLM (复杂推理与 <code>&lt;fay_action&gt;</code> 工具编排层)</h3>
+          <div class="row">
+            <label><input type="checkbox" id="brain-llm-enabled" /> 启用外部大模型协同推理</label>
+            <select id="brain-llm-provider">
+              <option value="ollama">ollama (Local HTTP)</option>
+              <option value="openai_compatible">openai_compatible</option>
+              <option value="gemini">gemini</option>
+              <option value="anthropic">anthropic</option>
+            </select>
+          </div>
+          <div class="row">
+            <label class="muted" style="width:82px">Base URL:</label>
+            <input type="text" id="brain-llm-url" value="http://127.0.0.1:11434/v1" style="flex:1" />
+          </div>
+          <div class="row">
+            <label class="muted" style="width:82px">Model:</label>
+            <input type="text" id="brain-llm-model" value="qwen2.5:7b" style="width:180px" />
+            <label class="muted">Temp:</label>
+            <input type="number" id="brain-llm-temp" value="0.4" step="0.1" min="0" max="2" style="width:68px" />
+            <label class="muted">MaxTok:</label>
+            <input type="number" id="brain-llm-maxtok" value="1024" step="128" min="64" max="32768" style="width:82px" />
+          </div>
+          <div class="row">
+            <label class="muted" style="width:82px">API Key:</label>
+            <input type="password" id="brain-llm-cred" placeholder="<API_KEY_PLACEHOLDER> 留空保持不变；输入后自动加密存入 FayID 保险箱" style="flex:1" />
+          </div>
+        </div>
+
+        <div class="fay-card" style="margin-bottom:0">
+          <h3>Ego 个体化小脑 (三合一：直觉路由 · 动态上下文 · 红线守卫)</h3>
+          <div class="row">
+            <label class="muted" style="width:86px">运行模式:</label>
+            <select id="brain-ego-mode">
+              <option value="embedded">embedded (内置确定性三合一管线)</option>
+              <option value="http_service">http_service (独立 Ego 守护服务 :7980)</option>
+              <option value="local_egopod">local_egopod (本地签名 .egopod 包挂载)</option>
+            </select>
+            <label><input type="checkbox" id="brain-ego-fast" checked /> 快直觉优先</label>
+          </div>
+          <div class="row">
+            <label class="muted" style="width:86px">Ego URL:</label>
+            <input type="text" id="brain-ego-endpoint" value="http://127.0.0.1:7980" style="width:190px" />
+            <input type="text" id="brain-egopod-path" placeholder="可选 /path/to/ego_pack" style="flex:1" />
+          </div>
+          <div class="row">
+            <label class="muted" style="width:86px">人格风格:</label>
+            <input type="text" id="brain-ego-style" value="沉稳、简洁、严格尊重人类原型主权与宪章边界" style="flex:1" />
+          </div>
+          <div class="row">
+            <label class="muted" style="width:86px">红线约束:</label>
+            <input type="text" id="brain-ego-redlines" value="绝不泄露根身份助记词或原始 API Key, 高风险操作必须经 CAP 人类原型确认" style="flex:1" />
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ok" onclick="saveFayBrain()">保存大脑配置 (Save Brain Config)</button>
+        <button class="btn secondary" onclick="testFayBrain()">测试大脑连通性 (Test Ego + External LLM)</button>
+      </div>
+      <pre class="code" id="brain-test-result" style="display:none"></pre>
+    </div>
+
     <div id="fays-container"></div>
 
     <div class="card">
@@ -424,19 +511,34 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     <div class="grid-2">
       <div class="card">
         <h2>ICP (<code>.ctx</code>) Adaptive Chat &amp; Host Driver Trigger</h2>
-        <div class="row">
-          <label class="muted">Active Fay:</label>
-          <select id="chat-fay-select" onchange="renderSelectedChat()"></select>
+        <div class="row" style="justify-content:space-between">
+          <div class="row">
+            <label class="muted">Active Fay:</label>
+            <select id="chat-fay-select" onchange="renderSelectedChat()"></select>
+          </div>
+          <span class="pill" id="chat-brain-pill">Brain: Ego Embedded</span>
         </div>
-        <div class="row">
-          <span class="muted">Quick Sandbox Triggers:</span>
-          <button class="btn secondary" onclick="fillPrompt('/write notes/todo.md Ship FayGer MVP')">Routine Write</button>
-          <button class="btn secondary" onclick="fillPrompt('/read notes/todo.md')">Routine Read</button>
-          <button class="btn secondary" onclick="fillPrompt('/exec workspace.ls')">High-Risk Exec (CAP Hold)</button>
-          <button class="btn secondary" onclick="fillPrompt('/camera desk_view')">High-Risk Camera (CAP Hold)</button>
-          <button class="btn secondary" onclick="fillPrompt('查询我的美誉值与投票优先权额度 μ')">Query MeriToken (μ)</button>
+        <div class="fay-card" style="padding:10px 12px;margin:8px 0">
+          <div class="muted" style="font-weight:700;margin-bottom:6px">终端硬件 / 操作系统 / 桌面软件操控台 (一键实测 · Faying 门禁 + CAP 高风险审批):</div>
+          <div class="row" style="gap:6px">
+            <button class="btn secondary" onclick="runQuickHostPrompt('/hardware')">硬件电池与传感器遥测</button>
+            <button class="btn secondary" onclick="runQuickHostPrompt('/clipboard-write Hello from FayGer iFay')">写入系统剪贴板</button>
+            <button class="btn secondary" onclick="runQuickHostPrompt('/clipboard-read')">读取系统剪贴板</button>
+            <button class="btn secondary" onclick="runQuickHostPrompt('/notify FayGer|iFay 已连接宿主通知中心')">发送原生桌面通知</button>
+            <button class="btn secondary" onclick="runQuickHostPrompt('/speak 你好，我是受人类原型监护的数字灵魂')">扬声器语音播报</button>
+            <button class="btn secondary" style="border-color:var(--warn);color:#fcd34d" onclick="runQuickHostPrompt('/screenshot desk')">抓取真实屏幕截图 (CAP审批)</button>
+            <button class="btn secondary" style="border-color:var(--warn);color:#fcd34d" onclick="runQuickHostPrompt('/open Calculator')">唤起桌面软件 Calculator (CAP审批)</button>
+            <button class="btn secondary" style="border-color:var(--warn);color:#fcd34d" onclick="runQuickHostPrompt('/exec uname')">执行受控终端命令 uname (CAP审批)</button>
+          </div>
+          <div class="row" style="gap:6px;margin-top:6px">
+            <span class="muted">沙箱与美誉快捷指令:</span>
+            <button class="btn secondary" onclick="fillPrompt('/write notes/todo.md Ship FayGer v0.3.0')">Routine Write</button>
+            <button class="btn secondary" onclick="fillPrompt('/read notes/todo.md')">Routine Read</button>
+            <button class="btn secondary" onclick="fillPrompt('/camera desk_view')">High-Risk Camera (CAP Hold)</button>
+            <button class="btn secondary" onclick="fillPrompt('查询我的美誉值与投票优先权额度 μ')">Query MeriToken (μ)</button>
+          </div>
         </div>
-        <textarea id="chat-input" placeholder="Send message or /write, /read, /exec, /camera..."></textarea>
+        <textarea id="chat-input" placeholder="输入自然语言（支持外部大模型自动编排 <fay_action>）或 /hardware, /clipboard-write, /notify, /speak, /screenshot, /open, /exec..."></textarea>
         <div class="row">
           <button class="btn" onclick="sendChat()">Send via ICP (.ctx)</button>
         </div>
@@ -603,8 +705,22 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <div id="toast"></div>
 
 <script>
-const KNOWN_CAPS = ["fs.read", "fs.write", "process.exec", "net.http", "media.camera", "media.mic"];
+const KNOWN_CAPS = [
+  "fs.read",
+  "fs.write",
+  "os.clipboard",
+  "os.notify",
+  "hardware.telemetry",
+  "hardware.audio",
+  "hardware.screen",
+  "app.control",
+  "process.exec",
+  "net.http",
+  "media.camera",
+  "media.mic"
+];
 let STATE = null;
+let LAST_LOADED_BRAIN_FAY_ID = '';
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -672,6 +788,54 @@ function renderOverview() {
   document.getElementById('pool-ego-ep').value = STATE.host_pool.ego_endpoint || 'http://127.0.0.1:7980';
   document.getElementById('pool-net-online').checked = !!STATE.host_pool.network_online;
   document.getElementById('device-profile-json').textContent = JSON.stringify(STATE.device_profile, null, 2);
+
+  const perms = STATE.os_permissions || [];
+  const permBox = document.getElementById('os-permissions-box');
+  if (!perms.length) {
+    permBox.innerHTML = '<p class="muted">OS permission probe unavailable.</p>';
+  } else {
+    permBox.innerHTML = `
+      <table class="kv">
+        <tr><th>宿主能力</th><th>安全门禁等级</th><th>OS 就绪状态</th><th>资源池授权</th><th>系统原生机制与说明</th><th>合法申请与隐私引导</th></tr>
+        ${perms.map(p => {
+          const stClass = p.status === 'ready' ? 'ok' : (p.status === 'needs_os_grant' ? 'warn' : 'danger');
+          const tierLabel = p.risk_tier === 'high_cap_approval' ? '高危 · 需 CAP 审批' : '常规 · Faying 直通';
+          return `
+            <tr>
+              <td><code>${esc(p.capability)}</code></td>
+              <td><span class="pill ${p.risk_tier === 'high_cap_approval' ? 'warn' : 'ok'}">${tierLabel}</span></td>
+              <td><span class="pill ${stClass}">${esc(p.status)}</span></td>
+              <td>${p.in_host_pool ? '✓ 已纳入' : '✗ 未纳入'}</td>
+              <td><b>${esc(p.os_mechanism)}</b><br/><span class="muted">${esc(p.detail)}</span></td>
+              <td>
+                <div class="row" style="margin:0;gap:6px">
+                  <button class="btn secondary" onclick="requestOsPermission('${esc(p.capability)}', false)">申请系统权限</button>
+                  ${p.settings_uri ? `<button class="btn secondary" onclick="requestOsPermission('${esc(p.capability)}', true)">打开系统隐私设置</button>` : ''}
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </table>
+    `;
+  }
+}
+
+async function requestOsPermission(capability, open_settings) {
+  const fb = document.getElementById('os-permissions-feedback');
+  try {
+    const res = await api('/api/v1/os/permissions/request', 'POST', {
+      capability,
+      open_settings,
+      grant_to_host_pool: true
+    });
+    fb.innerHTML = `<div class="ctx-approval" style="border-color:var(--ok)"><b>[${esc(res.capability)}] 系统权限探测/申请已执行</b>：状态=<code>${esc(res.status)}</code> · 动作=${esc(res.triggered_action)} ${res.settings_opened ? '· 已为您唤起系统隐私设置页' : ''}</div>`;
+    toast('已探测并同步宿主权限: ' + capability);
+    await refreshAll();
+  } catch (e) {
+    fb.innerHTML = `<div class="ctx-alert">${esc(e.message)}</div>`;
+    toast(e.message);
+  }
 }
 
 async function saveHostPool() {
@@ -777,6 +941,19 @@ async function loadBufPath() {
 function renderFays() {
   const container = document.getElementById('fays-container');
   const fays = STATE.fays || [];
+
+  const brainSel = document.getElementById('brain-fay-select');
+  const prevBrainSel = brainSel.value;
+  brainSel.innerHTML = fays.map(f => `<option value="${esc(f.fay_id)}">${esc(f.display_name)} (${esc(f.kind.toUpperCase())}) — ${esc(f.instance_id)}</option>`).join('');
+  if (prevBrainSel && fays.some(f => f.fay_id === prevBrainSel)) {
+    brainSel.value = prevBrainSel;
+  }
+  if (brainSel.value && brainSel.value !== LAST_LOADED_BRAIN_FAY_ID) {
+    loadSelectedFayBrainIntoForm();
+  } else {
+    refreshBrainKeyBadge();
+  }
+
   if (!fays.length) {
     container.innerHTML = '<div class="card muted">No Fay instances mounted yet. Create an iFay or coFay above!</div>';
   } else {
@@ -791,6 +968,10 @@ function renderFays() {
         </label>
       `).join('');
       const m = f.merit || { cur_merit_formatted: '5.00', consumable_merit_formatted: '2.28', min_merit_floor_formatted: '2.72' };
+      const b = f.brain || { external_llm: { enabled: false }, ego: { mode: 'embedded' } };
+      const brainBadge = (b.external_llm && b.external_llm.enabled)
+        ? `Brain: Ego(${b.ego.mode}) + ${b.external_llm.provider}/${b.external_llm.model}`
+        : `Brain: Ego(${b.ego ? b.ego.mode : 'embedded'})`;
       return `
         <div class="fay-card ${isFaying ? 'faying' : 'rogue'}">
           <div class="row" style="justify-content:space-between">
@@ -799,9 +980,11 @@ function renderFays() {
               <span class="pill">${esc(f.kind.toUpperCase())}</span>
               <code class="muted">${esc(f.fay_id)}</code>
               <span class="pill ${isFaying ? 'ok' : 'danger'}">${esc(f.faying_state)}</span>
+              <span class="pill ${b.external_llm && b.external_llm.enabled ? 'ok' : ''}">${esc(brainBadge)}</span>
               <span class="pill merit-pill">MeriToken: ${esc(m.cur_merit_formatted)} μ (可消减 ${esc(m.consumable_merit_formatted)} μ · 底值 ${esc(m.min_merit_floor_formatted)} μ)</span>
             </div>
             <div class="row">
+              <button class="btn secondary" onclick="jumpToBrainConfig('${f.fay_id}')">配置大脑</button>
               <button class="btn secondary" onclick="jumpToMeritTab('${f.fay_id}')">美誉值与优先权 (Tab 6)</button>
               ${isFaying
                 ? `<button class="btn secondary" onclick="sendHeartbeat('${f.fay_id}')">Heartbeat</button>`
@@ -873,6 +1056,136 @@ async function triggerBrake(fayId) {
   await refreshAll();
 }
 
+function jumpToBrainConfig(fayId) {
+  const btn = document.getElementById('nav-tab-fays');
+  switchTab('tab-fays', btn);
+  const sel = document.getElementById('brain-fay-select');
+  if (sel && fayId) {
+    sel.value = fayId;
+    loadSelectedFayBrainIntoForm();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
+function refreshBrainKeyBadge() {
+  const fayId = document.getElementById('brain-fay-select').value;
+  const fay = (STATE && STATE.fays || []).find(f => f.fay_id === fayId);
+  const badge = document.getElementById('brain-apikey-badge');
+  if (!fay || !fay.brain || !fay.brain.external_llm) {
+    badge.textContent = 'API Key: 未配置';
+    badge.className = 'pill';
+    return;
+  }
+  if (fay.brain.external_llm.has_api_key) {
+    badge.textContent = '已加密存入保险箱 ✓';
+    badge.className = 'pill ok';
+  } else {
+    badge.textContent = 'API Key: 未配置 (Ollama 本地免密)';
+    badge.className = 'pill warn';
+  }
+}
+
+function loadSelectedFayBrainIntoForm() {
+  const fayId = document.getElementById('brain-fay-select').value;
+  const fay = (STATE && STATE.fays || []).find(f => f.fay_id === fayId);
+  if (!fay || !fay.brain) return;
+  LAST_LOADED_BRAIN_FAY_ID = fayId;
+  const llm = fay.brain.external_llm || {};
+  const ego = fay.brain.ego || {};
+  document.getElementById('brain-llm-enabled').checked = !!llm.enabled;
+  document.getElementById('brain-llm-provider').value = llm.provider || 'ollama';
+  document.getElementById('brain-llm-url').value = llm.base_url || 'http://127.0.0.1:11434/v1';
+  document.getElementById('brain-llm-model').value = llm.model || 'qwen2.5:7b';
+  document.getElementById('brain-llm-temp').value = llm.temperature ?? 0.4;
+  document.getElementById('brain-llm-maxtok').value = llm.max_tokens ?? 1024;
+  document.getElementById('brain-llm-cred').value = '';
+  document.getElementById('brain-ego-mode').value = ego.mode || 'embedded';
+  document.getElementById('brain-ego-endpoint').value = ego.ego_endpoint || ego.endpoint || 'http://127.0.0.1:7980';
+  document.getElementById('brain-egopod-path').value = ego.egopod_path || '';
+  document.getElementById('brain-ego-style').value = ego.persona_style || '';
+  document.getElementById('brain-ego-redlines').value = (ego.redlines || []).join(', ');
+  document.getElementById('brain-ego-fast').checked = ego.fast_intuition_first !== false;
+  refreshBrainKeyBadge();
+}
+
+function applyBrainPreset(preset) {
+  if (!preset) return;
+  document.getElementById('brain-llm-enabled').checked = true;
+  if (preset === 'ollama') {
+    document.getElementById('brain-llm-provider').value = 'ollama';
+    document.getElementById('brain-llm-url').value = 'http://127.0.0.1:11434/v1';
+    document.getElementById('brain-llm-model').value = 'qwen2.5:7b';
+  } else if (preset === 'openai') {
+    document.getElementById('brain-llm-provider').value = 'openai_compatible';
+    document.getElementById('brain-llm-url').value = 'https://api.openai.com/v1';
+    document.getElementById('brain-llm-model').value = 'gpt-4o-mini';
+  } else if (preset === 'deepseek') {
+    document.getElementById('brain-llm-provider').value = 'openai_compatible';
+    document.getElementById('brain-llm-url').value = 'https://api.deepseek.com/v1';
+    document.getElementById('brain-llm-model').value = 'deepseek-chat';
+  } else if (preset === 'gemini') {
+    document.getElementById('brain-llm-provider').value = 'gemini';
+    document.getElementById('brain-llm-url').value = 'https://generativelanguage.googleapis.com/v1beta/openai';
+    document.getElementById('brain-llm-model').value = 'gemini-2.5-flash';
+  } else if (preset === 'anthropic') {
+    document.getElementById('brain-llm-provider').value = 'anthropic';
+    document.getElementById('brain-llm-url').value = 'https://api.anthropic.com/v1';
+    document.getElementById('brain-llm-model').value = 'claude-3-5-sonnet-latest';
+  }
+}
+
+async function saveFayBrain() {
+  const fayId = document.getElementById('brain-fay-select').value;
+  if (!fayId) return toast('请先创建并选择目标 Fay');
+  const apiKeyRaw = document.getElementById('brain-llm-cred').value.trim();
+  const extPayload = {
+    enabled: document.getElementById('brain-llm-enabled').checked,
+    provider: document.getElementById('brain-llm-provider').value,
+    base_url: document.getElementById('brain-llm-url').value.trim(),
+    model: document.getElementById('brain-llm-model').value.trim(),
+    temperature: Number(document.getElementById('brain-llm-temp').value || 0.4),
+    max_tokens: Number(document.getElementById('brain-llm-maxtok').value || 1024)
+  };
+  if (apiKeyRaw) extPayload.api_key = apiKeyRaw;
+  const egopodPath = document.getElementById('brain-egopod-path').value.trim();
+  const egoPayload = {
+    mode: document.getElementById('brain-ego-mode').value,
+    ego_endpoint: document.getElementById('brain-ego-endpoint').value.trim(),
+    egopod_path: egopodPath || null,
+    persona_style: document.getElementById('brain-ego-style').value.trim(),
+    redlines: document.getElementById('brain-ego-redlines').value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+    fast_intuition_first: document.getElementById('brain-ego-fast').checked
+  };
+  try {
+    await api(`/api/v1/fays/${encodeURIComponent(fayId)}/brain`, 'POST', {
+      external_llm: extPayload,
+      ego: egoPayload
+    });
+    document.getElementById('brain-llm-cred').value = '';
+    toast('大脑配置已保存 (API Key 已密封入保险箱)');
+    await refreshAll();
+    loadSelectedFayBrainIntoForm();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function testFayBrain() {
+  const fayId = document.getElementById('brain-fay-select').value;
+  if (!fayId) return toast('请先创建并选择目标 Fay');
+  const box = document.getElementById('brain-test-result');
+  box.style.display = 'block';
+  box.textContent = '正在探测 Ego 与外部大模型连通性...';
+  try {
+    const rep = await api(`/api/v1/fays/${encodeURIComponent(fayId)}/brain/test`, 'POST', {});
+    box.textContent = JSON.stringify(rep, null, 2);
+    toast(rep.ok ? '大脑连通性测试通过 ✓' : '大脑连通性测试返回告警');
+  } catch (e) {
+    box.textContent = 'Error: ' + e.message;
+    toast(e.message);
+  }
+}
+
 function renderIcpTab() {
   const sel = document.getElementById('chat-fay-select');
   const prev = sel.value;
@@ -904,10 +1217,21 @@ function renderIcpTab() {
 function renderSelectedChat() {
   const fayId = document.getElementById('chat-fay-select').value;
   const stream = document.getElementById('chat-stream');
+  const brainPill = document.getElementById('chat-brain-pill');
   const fay = (STATE.fays || []).find(f => f.fay_id === fayId);
   if (!fay) {
+    brainPill.textContent = 'Brain: Unmounted';
+    brainPill.className = 'pill';
     stream.innerHTML = '<p class="muted">Create or mount a Fay first.</p>';
     return;
+  }
+  const b = fay.brain || {};
+  if (b.external_llm && b.external_llm.enabled) {
+    brainPill.textContent = `Brain: Ego(${b.ego ? b.ego.mode : 'embedded'}) + External LLM (${b.external_llm.provider}/${b.external_llm.model})`;
+    brainPill.className = 'pill ok';
+  } else {
+    brainPill.textContent = `Brain: Ego(${b.ego ? b.ego.mode : 'embedded'}) Standalone`;
+    brainPill.className = 'pill warn';
   }
   const turns = (fay.chat_history || []).slice().reverse();
   stream.innerHTML = turns.map(t => {
@@ -918,7 +1242,7 @@ function renderSelectedChat() {
         <div class="muted">You: <b>${esc(t.user_input)}</b></div>
         <div style="margin-top:6px">${esc(c.summary_text)}</div>
         <div class="muted" style="font-size:11px;margin-top:4px">
-          ICP <code>${esc(c.schema_version)}</code> · Ego: <code>${esc(c.ego_trace.mode)}</code> (intent=${esc(c.ego_trace.intuition_intent)})
+          ICP <code>${esc(c.schema_version)}</code> · Brain Pipeline: <code>${esc(c.ego_trace.mode)}</code> (intent=${esc(c.ego_trace.intuition_intent)}) · ctx=${esc(c.ego_trace.dynamic_context_summary || '')}
         </div>
         ${anns}
         <details style="margin-top:8px">
@@ -975,6 +1299,11 @@ function renderAnnotation(a) {
 
 function fillPrompt(txt) {
   document.getElementById('chat-input').value = txt;
+}
+
+async function runQuickHostPrompt(txt) {
+  document.getElementById('chat-input').value = txt;
+  await sendChat();
 }
 
 async function sendChat() {

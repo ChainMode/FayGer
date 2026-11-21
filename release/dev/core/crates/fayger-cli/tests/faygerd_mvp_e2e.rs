@@ -126,6 +126,9 @@ fn faygerd_full_mvp_closed_loop_over_ephemeral_tcp() {
     assert!(html.contains("ICP 富交互对话与 CAP 审批"));
     assert!(html.contains("双 Fay 心灵感应协作间"));
     assert!(html.contains("6. 美誉值与优先权 (MeriToken)"));
+    assert!(html.contains("OS 原生权限探针与一键申请面板"));
+    assert!(html.contains("配置大脑：Ego 与外部大模型"));
+    assert!(html.contains("终端硬件 / 操作系统 / 桌面软件操控台"));
     assert!(html.contains("Panel A — 美誉值展示与分级凭证出示"));
     assert!(html.contains("Panel B — 添加美誉值"));
     assert!(html.contains("Panel C — 消费美誉值"));
@@ -638,19 +641,22 @@ fn cli_subcommands_profile_wallet_soul_and_chat_work_end_to_end() {
             addr: "127.0.0.1:9090".to_owned(),
             state_dir: None,
             gmchain_endpoint: None,
+            open_browser: false,
         }
     );
     assert_eq!(
         parse_args(&[
             "up".to_owned(),
             "--gmchain-endpoint".to_owned(),
-            "http://127.0.0.1:8546".to_owned()
+            "http://127.0.0.1:8546".to_owned(),
+            "--open".to_owned(),
         ])
         .unwrap(),
         Command::Up {
             addr: "127.0.0.1:7979".to_owned(),
             state_dir: None,
             gmchain_endpoint: Some("http://127.0.0.1:8546".to_owned()),
+            open_browser: true,
         }
     );
     assert_eq!(
@@ -659,6 +665,7 @@ fn cli_subcommands_profile_wallet_soul_and_chat_work_end_to_end() {
             addr: "127.0.0.1:7979".to_owned(),
             state_dir: None,
             gmchain_endpoint: None,
+            open_browser: false,
         }
     );
 
@@ -1167,5 +1174,367 @@ fn meritoken_live_gmchain_json_rpc_wire_roundtrip_e2e() {
     stop_gmc.store(true, Ordering::SeqCst);
     let _ = TcpStream::connect(gmc_addr);
     let _ = gmc_thread.join();
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn faygerd_v0_3_0_os_permissions_brain_external_llm_ego_and_real_host_drivers_e2e() {
+    use std::sync::Mutex;
+
+    std::env::set_var("FAYGER_HEADLESS_PERMISSION_TEST", "1");
+    std::env::set_var("FAYGER_MUTE_AUDIO", "1");
+    std::env::set_var("FAYGER_SANDBOX_CLIPBOARD_ONLY", "1");
+
+    // Spin up a local loopback mock OpenAI-compatible External LLM server (`127.0.0.1:0`)
+    let llm_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock external llm");
+    let llm_addr = llm_listener.local_addr().expect("llm addr");
+    let stop_llm = Arc::new(AtomicBool::new(false));
+    let stop_llm_clone = Arc::clone(&stop_llm);
+    let seen_auth_headers: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_auth_clone = Arc::clone(&seen_auth_headers);
+
+    let llm_thread = thread::spawn(move || {
+        for incoming in llm_listener.incoming() {
+            if stop_llm_clone.load(Ordering::SeqCst) {
+                break;
+            }
+            let Ok(mut stream) = incoming else {
+                continue;
+            };
+            let mut reader = BufReader::new(&stream);
+            let mut req_line = String::new();
+            if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut content_len = 0usize;
+            let mut auth_header = String::new();
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" || h == "\n" {
+                    break;
+                }
+                if let Some((k, v)) = h.split_once(':') {
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        content_len = v.trim().parse().unwrap_or(0);
+                    } else if k.trim().eq_ignore_ascii_case("authorization") {
+                        auth_header = v.trim().to_owned();
+                    }
+                }
+            }
+            seen_auth_clone.lock().unwrap().push(auth_header);
+            let mut body = vec![0u8; content_len];
+            if content_len > 0 {
+                let _ = reader.read_exact(&mut body);
+            }
+            let req_json: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+            let body_str = String::from_utf8_lossy(&body);
+
+            let reply_content = if body_str.contains("Ping connectivity check") {
+                "BRAIN_PING_OK — External LLM online!".to_owned()
+            } else if body_str.contains("帮我检查宿主硬件") {
+                // Deliberately include a sk- token in mock output to verify Ego Guard redacts it,
+                // plus a structured <fay_action> tag to trigger live HardwareTelemetry!
+                "好的，已通过 Ego 对齐为您采集宿主硬件遥测（测试脱敏 sk-live9988776655443322） <fay_action>{\"op\":\"hardware_telemetry\"}</fay_action>".to_owned()
+            } else {
+                format!("Mock LLM handled model={}", req_json["model"])
+            };
+
+            let resp_json = json!({
+                "id": "chatcmpl-fayger-test",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": reply_content
+                    }
+                }]
+            });
+            let resp_bytes = serde_json::to_vec(&resp_json).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                resp_bytes.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&resp_bytes);
+            let _ = stream.flush();
+        }
+    });
+
+    let state_dir = fresh_state_dir("v030-os-brain-drivers");
+    let mut daemon = spawn_daemon("127.0.0.1:0", &state_dir).expect("spawn faygerd");
+    let addr = daemon.local_addr();
+
+    // 1. OS Permissions Probe & Native Request Endpoints
+    let (perm_code, perms) = http_json(addr, "GET", "/api/v1/os/permissions", None);
+    assert_eq!(perm_code, 200);
+    let perm_arr = perms.as_array().unwrap();
+    assert_eq!(perm_arr.len(), 12);
+    assert!(perm_arr.iter().any(|p| p["capability"] == "os.clipboard"));
+    assert!(perm_arr
+        .iter()
+        .any(|p| p["capability"] == "hardware.screen"));
+    assert!(perm_arr.iter().any(|p| p["capability"] == "app.control"));
+
+    let (req_perm_code, req_perm_receipt) = http_json(
+        addr,
+        "POST",
+        "/api/v1/os/permissions/request",
+        Some(&json!({
+            "capability": "hardware.telemetry",
+            "open_settings": false,
+            "grant_to_host_pool": true
+        })),
+    );
+    assert_eq!(req_perm_code, 200);
+    assert_eq!(req_perm_receipt["capability"], "hardware.telemetry");
+    assert_eq!(req_perm_receipt["granted_to_host_pool"], true);
+
+    // 2. Create iFay soul (starts in ROGUE)
+    let (create_status, ifay) = http_json(
+        addr,
+        "POST",
+        "/api/v1/fays/create",
+        Some(&json!({"kind": "ifay", "name": "BrainAndHostSoul"})),
+    );
+    assert_eq!(create_status, 201);
+    let inst_id = ifay["instance_id"].as_str().unwrap().to_owned();
+    let fay_id = ifay["fay_id"].as_str().unwrap().to_owned();
+
+    // 3. Configure External LLM + Ego Brain with encrypted API key in FayID Vault
+    let secret_api_key = "<test-vaulted-llm-key-alpha-991122>";
+    let (brain_save_code, brain_view) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{inst_id}/brain"),
+        Some(&json!({
+            "external_llm": {
+                "enabled": true,
+                "provider": "openai_compatible",
+                "base_url": format!("http://{llm_addr}/v1"),
+                "model": "qwen2.5-coder",
+                "temperature": 0.2,
+                "max_tokens": 512,
+                "api_key": secret_api_key
+            },
+            "ego": {
+                "mode": "embedded",
+                "persona_style": "严谨、尊重人类原型主权",
+                "redlines": ["禁止泄露密钥", "高危动作必走 CAP 审批"],
+                "fast_intuition_first": false
+            }
+        })),
+    );
+    assert_eq!(brain_save_code, 200);
+    assert_eq!(brain_view["external_llm"]["enabled"], true);
+    assert_eq!(brain_view["external_llm"]["has_api_key"], true);
+
+    // Verify zero plaintext leakage across GET /brain, GET /state, GET /wallet, engine_state.json, and wallet_vault.json!
+    let (_, brain_get) = http_json(addr, "GET", &format!("/api/v1/fays/{inst_id}/brain"), None);
+    assert_eq!(brain_get["external_llm"]["has_api_key"], true);
+    assert!(!serde_json::to_string(&brain_get)
+        .unwrap()
+        .contains(secret_api_key));
+    let (_, full_state) = http_json(addr, "GET", "/api/v1/state", None);
+    assert!(!serde_json::to_string(&full_state)
+        .unwrap()
+        .contains(secret_api_key));
+    let engine_disk = fs::read_to_string(state_dir.join("engine_state.json")).unwrap();
+    assert!(!engine_disk.contains(secret_api_key));
+    let vault_disk = fs::read_to_string(state_dir.join("wallet_vault.json")).unwrap();
+    assert!(!vault_disk.contains(secret_api_key));
+
+    // 4. Test Brain Connectivity (`POST /api/v1/fays/<id>/brain/test`)
+    let (test_code, test_rep) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{inst_id}/brain/test"),
+        Some(&json!({})),
+    );
+    assert_eq!(test_code, 200);
+    assert_eq!(test_rep["ok"], true);
+    assert!(test_rep["ego_status"].as_str().unwrap().contains("ready"));
+    assert!(test_rep["llm_status"]
+        .as_str()
+        .unwrap()
+        .contains("connected"));
+    assert!(test_rep["sample_reply"]
+        .as_str()
+        .unwrap()
+        .contains("BRAIN_PING_OK"));
+    let seen_headers = seen_auth_headers.lock().unwrap().clone();
+    assert!(seen_headers.contains(&format!("Bearer {secret_api_key}")));
+
+    // 5. Verify ROGUE strictly blocks hardware/OS drivers (`HardwareTelemetry`, `OsClipboardWrite`, `OsNotify`)
+    for blocked_cmd in [
+        "/hardware",
+        "/clipboard-write rogue-blocked",
+        "/notify T|rogue",
+    ] {
+        let (_, rogue_turn) = http_json(
+            addr,
+            "POST",
+            &format!("/api/v1/fays/{fay_id}/chat"),
+            Some(&json!({"message": blocked_cmd})),
+        );
+        assert!(
+            rogue_turn["terminal_text"]
+                .as_str()
+                .unwrap()
+                .contains("DENY_ROGUE_FAY"),
+            "ROGUE must block {blocked_cmd}"
+        );
+    }
+
+    // 6. Activate Faying ON -> execute normal-risk OS/Hardware drivers + Brain `<fay_action>` orchestration!
+    let (faying_code, _) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/faying"),
+        Some(&json!({"grade": "G2"})),
+    );
+    assert_eq!(faying_code, 200);
+
+    // Chat via Ego + External LLM -> External LLM emits `<fay_action>{"op":"hardware_telemetry"}</fay_action>`
+    // AND Ego Guard scrubs `sk-live9988776655443322`!
+    let (brain_turn_code, brain_turn) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "帮我检查宿主硬件电池与内存状态"})),
+    );
+    assert_eq!(brain_turn_code, 200);
+    let summary_txt = brain_turn["response_ctx"]["summary_text"].as_str().unwrap();
+    assert!(!summary_txt.contains("sk-live9988776655443322"));
+    assert!(summary_txt.contains("[REDACTED_LEGACY_SECRET_PREFIX]"));
+    assert!(summary_txt.contains("Hardware Telemetry:"));
+    assert!(brain_turn["response_ctx"]["ego_trace"]["mode"]
+        .as_str()
+        .unwrap()
+        .contains("ego_plus_external_llm:openai_compatible:qwen2.5-coder"));
+
+    // Clipboard Write & Read, Desktop Notify, Speaker TTS execute immediately in FAYING
+    let (_, clip_w) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "/clipboard-write FayGer-Clipboard-Payload-030"})),
+    );
+    assert!(clip_w["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("ALLOW_CONTROLLED"));
+
+    let (_, clip_r) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "/clipboard-read"})),
+    );
+    assert!(clip_r["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("FayGer-Clipboard-Payload-030"));
+
+    let (_, notify_res) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "/notify FayGer|Notification verified"})),
+    );
+    assert!(notify_res["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("ALLOW_CONTROLLED"));
+
+    let (_, speak_res) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "/speak 你好人类原型"})),
+    );
+    assert!(speak_res["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("ALLOW_CONTROLLED"));
+
+    // 7. High-risk drivers (`AppControl`, `HardwareScreenCapture`, `ProcessExec`) MUST hold for CAP Human Prime confirmation!
+    let (_, app_hold) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({
+            "message": "",
+            "host_action": {
+                "op": "app_control",
+                "app_name": "Calculator",
+                "action": "verify_installed"
+            }
+        })),
+    );
+    assert!(app_hold["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("HOLD_FOR_HUMAN_CONFIRMATION"));
+
+    let (_, screen_hold) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "/screenshot e2e_desk"})),
+    );
+    assert!(screen_hold["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("HOLD_FOR_HUMAN_CONFIRMATION"));
+
+    let (_, uname_hold) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/chat"),
+        Some(&json!({"message": "/exec uname"})),
+    );
+    assert!(uname_hold["terminal_text"]
+        .as_str()
+        .unwrap()
+        .contains("HOLD_FOR_HUMAN_CONFIRMATION"));
+
+    // Approve all 3 pending high-risk CAP items (testing both `/api/v1/approvals/<id>/decide` and `/api/v1/cap/approvals/<id>/decide`)
+    let (_, pending_list) = http_json(addr, "GET", "/api/v1/cap/approvals", None);
+    let pending_ids: Vec<String> = pending_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["status"] == "pending")
+        .map(|a| a["approval_id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(pending_ids.len(), 3);
+
+    for (idx, apr_id) in pending_ids.iter().enumerate() {
+        let decide_path = if idx == 0 {
+            format!("/api/v1/approvals/{apr_id}/decide")
+        } else {
+            format!("/api/v1/cap/approvals/{apr_id}/decide")
+        };
+        let (d_code, decided_item) =
+            http_json(addr, "POST", &decide_path, Some(&json!({"approve": true})));
+        assert_eq!(d_code, 200);
+        assert_eq!(decided_item["status"], "approved");
+        assert!(decided_item["execution_summary"].as_str().is_some());
+    }
+
+    // 8. Verify SHA-256 hash-chained audit trail integrity across all new stages
+    let (audit_http_code, audit_payload) = http_json(addr, "GET", "/api/v1/audit", None);
+    assert_eq!(audit_http_code, 200);
+    assert_eq!(audit_payload["verified"], true);
+    let entries: Vec<HashChainedAuditEntry> =
+        serde_json::from_value(audit_payload["entries"].clone()).expect("parse audit");
+    assert!(verify_audit_chain(&entries));
+    assert!(entries.iter().any(|e| e.stage == "os.permission_requested"));
+    assert!(entries.iter().any(|e| e.stage == "brain.configured"));
+
+    daemon.shutdown();
+    stop_llm.store(true, Ordering::SeqCst);
+    let _ = TcpStream::connect(llm_addr);
+    let _ = llm_thread.join();
     let _ = fs::remove_dir_all(&state_dir);
 }

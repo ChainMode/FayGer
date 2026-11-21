@@ -248,6 +248,15 @@ struct SealedCredentialEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct VaultNamedSecretEntry {
+    label: String,
+    provider: String,
+    grant_id: String,
+    sealed_secret_hex: String,
+    updated_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct WalletVaultData {
     schema_version: String,
     label: String,
@@ -262,6 +271,8 @@ struct WalletVaultData {
     derived_cofays: Vec<DerivedCofayRecord>,
     dynamic_codes: Vec<DynamicCodeTicket>,
     sealed_credentials: Vec<SealedCredentialEntry>,
+    #[serde(default)]
+    named_secrets: Vec<VaultNamedSecretEntry>,
 }
 
 /// 将任意字节序列编码为小写无填充 RFC 4648 Base32（仅含 `a..=z` 与 `2..=7`）。
@@ -354,6 +365,7 @@ pub fn init_wallet(
         derived_cofays: Vec::new(),
         dynamic_codes: Vec::new(),
         sealed_credentials: Vec::new(),
+        named_secrets: Vec::new(),
     };
     save_vault(state_dir, &vault)?;
 
@@ -615,6 +627,90 @@ pub fn exchange_auth_grant(
     Ok(grant)
 }
 
+/// 在 `faygerd` 内部将外部模型密钥加密封存至 `FayID` 保险箱命名槽位（自动初始化未建库的保险箱，绝不明文落盘）。
+pub(crate) fn store_vault_secret_by_label(
+    state_dir: &Path,
+    label: &str,
+    provider: &str,
+    plaintext_secret: &str,
+    bound_fay_id: Option<&str>,
+) -> Result<AuthExchangeGrant, CliError> {
+    let clean_label = label.trim();
+    let clean_secret = plaintext_secret.trim();
+    if clean_label.is_empty() || clean_secret.is_empty() {
+        return Err(CliError::Usage(
+            "vault secret label and secret value must be non-empty".to_owned(),
+        ));
+    }
+    let grant = exchange_auth_grant(
+        state_dir,
+        provider,
+        clean_secret,
+        bound_fay_id,
+        vec!["llm.chat.completions".to_owned()],
+        604_800,
+    )?;
+    let mut vault = load_vault(state_dir)?;
+    let sealed_secret_hex = seal_secret_bytes(
+        &vault.master_seed_hex,
+        &grant.grant_id,
+        clean_secret.as_bytes(),
+    );
+    vault.named_secrets.retain(|s| s.label != clean_label);
+    vault.named_secrets.push(VaultNamedSecretEntry {
+        label: clean_label.to_owned(),
+        provider: provider.trim().to_owned(),
+        grant_id: grant.grant_id.clone(),
+        sealed_secret_hex,
+        updated_at_unix: unix_now_secs(),
+    });
+    save_vault(state_dir, &vault)?;
+    Ok(grant)
+}
+
+/// 检查 `FayID` 保险箱内是否存在指定标签的已加密密钥（不解封明文）。
+pub(crate) fn has_vault_secret_by_label(state_dir: &Path, label: &str) -> bool {
+    let clean_label = label.trim();
+    if clean_label.is_empty() || !state_dir.join(VAULT_FILENAME).exists() {
+        return false;
+    }
+    load_vault(state_dir).is_ok_and(|vault| {
+        vault
+            .named_secrets
+            .iter()
+            .any(|entry| entry.label == clean_label)
+    })
+}
+
+/// 仅供 `faygerd` 出站大模型客户端内部解封读取指定标签密钥（绝不向 `Fay` 或外部 HTTP GET 暴露）。
+pub(crate) fn load_vault_secret_by_label(
+    state_dir: &Path,
+    label: &str,
+) -> Result<Option<String>, CliError> {
+    let clean_label = label.trim();
+    if clean_label.is_empty() || !state_dir.join(VAULT_FILENAME).exists() {
+        return Ok(None);
+    }
+    let vault = load_vault(state_dir)?;
+    let Some(entry) = vault
+        .named_secrets
+        .iter()
+        .find(|item| item.label == clean_label)
+    else {
+        return Ok(None);
+    };
+    let bytes = unseal_secret_hex(
+        &vault.master_seed_hex,
+        &entry.grant_id,
+        &entry.sealed_secret_hex,
+    )?;
+    let text = String::from_utf8(bytes).map_err(|err| CliError::Io {
+        path: VAULT_FILENAME.to_owned(),
+        detail: format!("invalid UTF-8 in unsealed secret: {err}"),
+    })?;
+    Ok(Some(text))
+}
+
 /// 获取当前 Unix 秒级时间戳。
 #[must_use]
 pub fn unix_now_secs() -> u64 {
@@ -728,6 +824,35 @@ fn seal_secret_bytes(master_seed_hex: &str, grant_id: &str, plaintext: &[u8]) ->
         }
     }
     encode_hex(&sealed)
+}
+
+fn unseal_secret_hex(
+    master_seed_hex: &str,
+    grant_id: &str,
+    sealed_hex: &str,
+) -> Result<Vec<u8>, CliError> {
+    let hex_bytes = sealed_hex.as_bytes();
+    if hex_bytes.len() % 2 != 0 {
+        return Err(CliError::Io {
+            path: VAULT_FILENAME.to_owned(),
+            detail: "odd hex length in sealed secret".to_owned(),
+        });
+    }
+    let mut cipher = Vec::with_capacity(hex_bytes.len() / 2);
+    for pair in hex_bytes.chunks_exact(2) {
+        cipher.push((hex_val(pair[0]) << 4) | hex_val(pair[1]));
+    }
+    let mut plain = Vec::with_capacity(cipher.len());
+    for (block_idx, chunk) in cipher.chunks(32).enumerate() {
+        let key_stream = derive_seed_bytes(
+            "fayid.seal-stream.v1:",
+            format!("{master_seed_hex}:{grant_id}:{block_idx}").as_bytes(),
+        );
+        for (i, &byte) in chunk.iter().enumerate() {
+            plain.push(byte ^ key_stream[i]);
+        }
+    }
+    Ok(plain)
 }
 
 fn mask_human_id(raw_human_id: &str) -> String {
@@ -849,6 +974,24 @@ mod tests {
         let raw_vault_on_disk =
             fs::read_to_string(dir.join("wallet_vault.json")).expect("read vault");
         assert!(!raw_vault_on_disk.contains(demo_input));
+
+        // Internal named secret roundtrip (encrypted on disk, unsealed only in-memory)
+        let llm_secret = "<example-llm-provider-key-alpha-77>";
+        let _ = super::store_vault_secret_by_label(
+            &dir,
+            "llm_inst_0001",
+            "openai_compatible",
+            llm_secret,
+            Some(&ifay.ifay_id),
+        )
+        .expect("store named secret");
+        assert!(super::has_vault_secret_by_label(&dir, "llm_inst_0001"));
+        let unsealed = super::load_vault_secret_by_label(&dir, "llm_inst_0001")
+            .expect("load named")
+            .expect("present");
+        assert_eq!(unsealed, llm_secret);
+        let disk_after = fs::read_to_string(dir.join("wallet_vault.json")).expect("read vault 2");
+        assert!(!disk_after.contains(llm_secret));
 
         let _ = fs::remove_dir_all(&dir);
     }

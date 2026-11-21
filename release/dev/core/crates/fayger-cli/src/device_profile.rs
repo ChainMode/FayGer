@@ -27,10 +27,16 @@ pub const HOST_POOL_SCHEMA_VERSION: &str = "fayger-host-pool/1.0";
 /// 默认本地 `Ego` 三合一推理服务地址。
 pub const DEFAULT_EGO_ENDPOINT: &str = "http://127.0.0.1:7980";
 
-/// `FayGer` 宿主资源池标准能力目录。
-pub const KNOWN_HOST_CAPABILITIES: [&str; 6] = [
+/// `FayGer` 宿主资源池标准能力目录（覆盖文件沙箱、系统剪贴板/通知、硬件遥测/语音/截屏、桌面应用唤起与终端进程）。
+pub const KNOWN_HOST_CAPABILITIES: [&str; 12] = [
     "fs.read",
     "fs.write",
+    "os.clipboard",
+    "os.notify",
+    "hardware.telemetry",
+    "hardware.audio",
+    "hardware.screen",
+    "app.control",
     "process.exec",
     "net.http",
     "media.camera",

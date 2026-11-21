@@ -7,6 +7,7 @@ use crate::dashboard_html::dashboard_index_html;
 use crate::engine::{FayGerEngine, RequestedHostAction};
 use crate::error::CliError;
 use crate::merit::{parse_positive_mu_to_raw, MeritAddInput, MeritConsumeInput};
+use crate::os_control::open_browser_nonblocking;
 use crate::soul::SoulKind;
 use crate::wallet::{
     derive_cofay, derive_ifay, exchange_auth_grant, init_wallet, issue_dynamic_code, show_wallet,
@@ -116,6 +117,17 @@ pub fn serve_blocking_with_gmchain(
     gmchain_endpoint: Option<&str>,
     banner_out: &mut dyn std::io::Write,
 ) -> Result<(), CliError> {
+    serve_blocking_full(bind_addr, state_dir, gmchain_endpoint, false, banner_out)
+}
+
+/// 在当前线程阻塞运行 `faygerd`，支持 `--gmchain-endpoint` 与 `--open` 自动唤起本地浏览器。
+pub fn serve_blocking_full(
+    bind_addr: &str,
+    state_dir: &Path,
+    gmchain_endpoint: Option<&str>,
+    open_browser: bool,
+    banner_out: &mut dyn std::io::Write,
+) -> Result<(), CliError> {
     let mut engine = FayGerEngine::open(state_dir)?;
     if let Some(ep) = gmchain_endpoint {
         let _ = engine.update_merit_config(Some(ep))?;
@@ -130,8 +142,9 @@ pub fn serve_blocking_with_gmchain(
         detail: err.to_string(),
     })?;
 
+    let dashboard_url = format!("http://{local_addr}");
     let banner = format!(
-        "FayGer Three-in-One Daemon (faygerd v{}) is UP!\n  Dashboard UI:  http://{local_addr}\n  REST API Base: http://{local_addr}/api/v1\n  GMChain RPC:   {} [{}]\n  State Dir:     {}\nPress Ctrl+C to stop.\n",
+        "FayGer Three-in-One Daemon (faygerd v{}) is UP!\n  Dashboard UI:  {dashboard_url}\n  REST API Base: {dashboard_url}/api/v1\n  GMChain RPC:   {} [{}]\n  State Dir:     {}\nPress Ctrl+C to stop.\n",
         crate::FAYGER_VERSION,
         gm_cfg.rpc_url,
         gm_cfg.sync_mode,
@@ -144,6 +157,10 @@ pub fn serve_blocking_with_gmchain(
             path: "<stdout>".to_owned(),
             detail: err.to_string(),
         })?;
+
+    if open_browser {
+        open_browser_nonblocking(&dashboard_url);
+    }
 
     let shared_engine = Arc::new(Mutex::new(engine));
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -443,6 +460,23 @@ fn route_request(req: &HttpRequest, shared_engine: &Arc<Mutex<FayGerEngine>>) ->
                 true,
             )
         }
+        ("GET", "/api/v1/os/permissions") => HttpResponse::json_ok(&engine.get_os_permissions()),
+        ("POST", "/api/v1/os/permissions/request") => {
+            let body = parse_json_body(&req.body);
+            let cap = body.get("capability").and_then(Value::as_str).unwrap_or("");
+            let open_settings = body
+                .get("open_settings")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let grant_to_host_pool = body
+                .get("grant_to_host_pool")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            map_cli_res(
+                engine.request_os_permission(cap, open_settings, grant_to_host_pool),
+                false,
+            )
+        }
         ("GET", "/api/v1/merit/config") => HttpResponse::json_ok(&engine.merit_config()),
         ("POST" | "PUT", "/api/v1/merit/config") => {
             let body = parse_json_body(&req.body);
@@ -519,6 +553,19 @@ fn route_parameterized(req: &HttpRequest, engine: &mut FayGerEngine) -> HttpResp
                 .get("host_action")
                 .and_then(|v| serde_json::from_value(v.clone()).ok());
             map_cli_res(engine.chat_or_act(&id, message, explicit_action), false)
+        }
+        ("GET", ["api", "v1", "fays", instance_id, "brain"]) => {
+            let id = percent_decode(instance_id);
+            map_cli_res(engine.get_fay_brain(&id), false)
+        }
+        ("POST" | "PUT", ["api", "v1", "fays", instance_id, "brain"]) => {
+            let id = percent_decode(instance_id);
+            let body = parse_json_body(&req.body);
+            map_cli_res(engine.update_fay_brain(&id, &body), false)
+        }
+        ("POST", ["api", "v1", "fays", instance_id, "brain", "test"]) => {
+            let id = percent_decode(instance_id);
+            map_cli_res(engine.test_fay_brain(&id), false)
         }
         ("GET", ["api", "v1", "fays", instance_id, "merit"]) => {
             let id = percent_decode(instance_id);
@@ -607,7 +654,11 @@ fn route_parameterized(req: &HttpRequest, engine: &mut FayGerEngine) -> HttpResp
                 false,
             )
         }
-        ("POST", ["api", "v1", "cap", "approvals", approval_id, "decide"]) => {
+        (
+            "POST",
+            ["api", "v1", "cap", "approvals", approval_id, "decide"]
+            | ["api", "v1", "approvals", approval_id, "decide"],
+        ) => {
             let id = percent_decode(approval_id);
             let body = parse_json_body(&req.body);
             let approve = body

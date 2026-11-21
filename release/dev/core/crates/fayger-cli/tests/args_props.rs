@@ -42,6 +42,7 @@ fn arb_token() -> impl Strategy<Value = String> {
         Just("--json".to_owned()),
         Just("--state-dir".to_owned()),
         Just("--gmchain-endpoint".to_owned()),
+        Just("--open".to_owned()),
         Just("http://127.0.0.1:8546".to_owned()),
         Just("--entry".to_owned()),
         Just("--section".to_owned()),

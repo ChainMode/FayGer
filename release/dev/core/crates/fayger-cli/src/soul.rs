@@ -27,9 +27,15 @@ use std::path::Path;
 pub const SOUL_PACKAGE_SCHEMA_VERSION: &str = "fayger-soul-package/1.0";
 
 /// 默认写入 `.buf` 清单的请求能力集。
-pub const DEFAULT_SOUL_REQUESTED_CAPABILITIES: [&str; 5] = [
+pub const DEFAULT_SOUL_REQUESTED_CAPABILITIES: [&str; 11] = [
     "fs.read",
     "fs.write",
+    "os.clipboard",
+    "os.notify",
+    "hardware.telemetry",
+    "hardware.audio",
+    "hardware.screen",
+    "app.control",
     "process.exec",
     "net.http",
     "media.camera",

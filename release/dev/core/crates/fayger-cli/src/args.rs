@@ -123,6 +123,8 @@ pub enum Command {
         state_dir: Option<String>,
         /// 可选回环 `GMChain` JSON-RPC 端点（默认 `http://127.0.0.1:8546`）。
         gmchain_endpoint: Option<String>,
+        /// 是否在启动后自动唤起系统默认浏览器打开控制台。
+        open_browser: bool,
     },
     /// 在命令行中与已挂载 `Fay` 进行 `ICP`（`.ctx`）对话并展示终端文本降级结果。
     Chat {
@@ -932,11 +934,12 @@ fn parse_soul(rest: &[String]) -> Result<Command, CliError> {
     })
 }
 
-/// 解析 `up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>]`。
+/// 解析 `up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>] [--open]`。
 fn parse_up(rest: &[String]) -> Result<Command, CliError> {
     let mut addr = "127.0.0.1:7979".to_owned();
     let mut state_dir = None;
     let mut gmchain_endpoint = None;
+    let mut open_browser = false;
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -954,6 +957,10 @@ fn parse_up(rest: &[String]) -> Result<Command, CliError> {
                 gmchain_endpoint = Some(normalized);
                 i += 2;
             }
+            "--open" => {
+                open_browser = true;
+                i += 1;
+            }
             other => {
                 return Err(CliError::Usage(format!("unexpected up argument: {other}")));
             }
@@ -963,6 +970,7 @@ fn parse_up(rest: &[String]) -> Result<Command, CliError> {
         addr,
         state_dir,
         gmchain_endpoint,
+        open_browser,
     })
 }
 
@@ -1011,7 +1019,7 @@ fn parse_chat(rest: &[String]) -> Result<Command, CliError> {
 #[must_use]
 pub fn usage_text(topic: Option<&str>) -> String {
     match topic {
-        Some("up" | "serve") => "fayger up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（FayGer Dashboard，联动 GMChain/MeriToken）。".to_owned(),
+        Some("up" | "serve") => "fayger up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>] [--open]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（支持 --open 自动打开浏览器）。".to_owned(),
         Some("profile") => "fayger profile [--json] [--state-dir <dir>]\n    输出标准化设备运行时环境描述文件（fayger-device-profile/1.0）。".to_owned(),
         Some("wallet") => "fayger wallet <init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant> [--state-dir <dir>] [--json]\n    管理内置 FayID 助记词保险箱、不可关联动态码与 Auth Exchange 授权票据。".to_owned(),
         Some("soul") => "fayger soul create --kind ifay|cofay --name <name> --out <path.buf> [--state-dir <dir>] [--json]\n    一键创建并密封可运行的 iFay 数字灵魂运行包或 coFay 公共席位包（.buf）。".to_owned(),
@@ -1381,13 +1389,15 @@ mod tests {
                 "--addr",
                 "127.0.0.1:7979",
                 "--gmchain-endpoint",
-                "http://localhost:8546/rpc"
+                "http://localhost:8546/rpc",
+                "--open"
             ]))
             .expect("valid loopback"),
             Command::Up {
                 addr: "127.0.0.1:7979".to_owned(),
                 state_dir: None,
                 gmchain_endpoint: Some("http://localhost:8546".to_owned()),
+                open_browser: true,
             }
         );
         assert!(matches!(

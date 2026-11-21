@@ -2,7 +2,7 @@
 
 Fayger 核心参考实现（Cargo workspace），提供类似 Docker Desktop / Engine 的三位一体交付：**后台守护引擎（`faygerd`）+ 命令行（`fayger` CLI）+ 内嵌离线可视化控制台（`FayGer Dashboard`）**。
 
-当前工作区版本：`0.3.0-rc.1`。完整发布说明见 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，PO 验收步骤见 [`docs/PRERELEASE_ACCEPTANCE.md`](docs/PRERELEASE_ACCEPTANCE.md)。
+当前工作区版本：`0.3.0`。完整发布说明见 [`RELEASE_NOTES.md`](RELEASE_NOTES.md)，PO 验收步骤见 [`docs/PRERELEASE_ACCEPTANCE.md`](docs/PRERELEASE_ACCEPTANCE.md)。
 
 ## 30 秒快速体验（`fayger up` + Web 控制台）
 

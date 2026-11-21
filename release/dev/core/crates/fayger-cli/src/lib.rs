@@ -19,9 +19,10 @@
 //! assert!(text.contains("Terminated"));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/fayger-cli/0.3.0-rc.1")]
+#![doc(html_root_url = "https://docs.rs/fayger-cli/0.3.0")]
 
 pub mod args;
+pub mod brain;
 pub mod commands;
 pub mod daemon;
 pub mod dashboard_html;
@@ -34,18 +35,22 @@ pub mod host_profile;
 pub mod icp_ego;
 pub mod live_ifay;
 pub mod merit;
+pub mod os_control;
 pub mod soul;
 pub mod wallet;
 
 pub use args::{parse_args, usage_text, Command, PackSpec, WalletSubcommand};
+pub use brain::{
+    BrainTestReport, EgoBindingConfig, ExternalLlmConfig, FayBrainConfig, FayBrainView,
+};
 pub use commands::{
     assemble_manifest, assemble_manifest_with_registry, bridge_object, conformance_command,
     default_policy, demo_drone_command, demo_object, evaluate_manifest_command, inspect_object,
     pack_bytes, render_bridge_report, render_merit_standing_summary, run_object, RunReport,
 };
 pub use daemon::{
-    serve_blocking, serve_blocking_with_gmchain, spawn_daemon, spawn_daemon_with_gmchain,
-    FaygerDaemonHandle, DEFAULT_DAEMON_ADDR,
+    serve_blocking, serve_blocking_full, serve_blocking_with_gmchain, spawn_daemon,
+    spawn_daemon_with_gmchain, FaygerDaemonHandle, DEFAULT_DAEMON_ADDR,
 };
 pub use device_profile::{
     detect_device_runtime_profile, negotiate_embodiment_slices, profile_command,
@@ -74,6 +79,10 @@ pub use merit::{
     MeritConsumeReceipt, MeritCredentialPresentation, MeritLedgerEntry, MeritStandingView,
     DEFAULT_GMCHAIN_ENDPOINT, INITIAL_CONSUMABLE_MERIT_RAW, INITIAL_CUR_MERIT_RAW,
     MERIT_CREDENTIAL_SCHEMA_VERSION, MERIT_SCALE, MIN_MERIT_E_RAW,
+};
+pub use os_control::{
+    probe_os_permissions, OsPermissionItem, OsPermissionRequestReceipt,
+    ALLOWED_PROCESS_EXEC_COMMANDS,
 };
 pub use soul::{
     create_soul_buf_bytes, extract_soul_from_buf, SoulKind, SoulPackageMetadata,
@@ -326,9 +335,10 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
             addr,
             state_dir,
             gmchain_endpoint,
+            open_browser,
         } => {
             let dir = resolve_state_dir(state_dir.as_deref());
-            serve_blocking_with_gmchain(addr, &dir, gmchain_endpoint.as_deref(), out)
+            serve_blocking_full(addr, &dir, gmchain_endpoint.as_deref(), *open_browser, out)
         }
         Command::Chat {
             fay_id,
@@ -505,7 +515,16 @@ fn resolve_state_dir(explicit: Option<&str>) -> std::path::PathBuf {
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        return std::path::PathBuf::from(home).join(".fayger").join("state");
+        if !home.trim().is_empty() {
+            return std::path::PathBuf::from(home).join(".fayger").join("state");
+        }
+    }
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        if !user_profile.trim().is_empty() {
+            return std::path::PathBuf::from(user_profile)
+                .join(".fayger")
+                .join("state");
+        }
     }
     std::path::PathBuf::from(".fayger-state")
 }

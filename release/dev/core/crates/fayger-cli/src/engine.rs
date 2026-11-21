@@ -10,6 +10,10 @@
 //! 4. **本地 `TP`（`Telepathy`）双 Fay 共享认知空间**：两个已挂载 `Fay` 在授权会话内直接共享结构化记忆、
 //!    视图状态与任务上下文，全程防篡改哈希链留痕。
 
+use crate::brain::{
+    apply_brain_update_json, orchestrate_brain_turn, test_brain_connectivity, BrainTestReport,
+    FayBrainConfig, FayBrainView,
+};
 use crate::commands::default_policy;
 use crate::device_profile::{
     detect_device_runtime_profile, negotiate_embodiment_slices, DeviceRuntimeProfile,
@@ -33,6 +37,12 @@ use crate::merit::{
     MeritConsumeInput, MeritConsumeReceipt, MeritCredentialPresentation, MeritLedgerEntry,
     MeritStandingView, DEFAULT_GMCHAIN_ENDPOINT, MERIT_SCALE, MIN_MERIT_E_RAW, SYNC_MODE_LIVE_RPC,
     SYNC_MODE_LOCAL_FALLBACK,
+};
+use crate::os_control::{
+    exec_app_control, exec_clipboard_read, exec_clipboard_write, exec_controlled_process,
+    exec_hardware_screen_capture, exec_hardware_speak, exec_hardware_telemetry, exec_os_notify,
+    probe_os_permissions, request_os_permission_native, validate_app_control_params,
+    validate_process_exec_command, OsPermissionItem, OsPermissionRequestReceipt,
 };
 use crate::soul::{create_soul_buf_bytes, extract_soul_from_buf, SoulKind, SoulPackageMetadata};
 use crate::wallet::{
@@ -137,6 +147,9 @@ pub struct StoredFayInstance {
     /// `MeriToken`（`美誉值`, `μ`）账户与优先权流水口袋（向后兼容旧快照自动初始化）。
     #[serde(default)]
     pub merit_pocket: MeriTokenPocketState,
+    /// 该实例的 `Ego` + 外部大模型（`External LLM`）双系统大脑配置。
+    #[serde(default)]
+    pub brain: FayBrainConfig,
 }
 
 /// 对外（REST API 与 Web 控制台）呈现的单个 `Fay` 实例全貌（含实时交集计算结果）。
@@ -179,9 +192,12 @@ pub struct FayInstanceView {
     /// 实时 `MeriToken`（美誉值 `μ`）与可消费优先权状态全貌。
     #[serde(default)]
     pub merit: MeritStandingView,
+    /// 对外脱敏的 `Ego` + 外部大模型大脑配置视图（不含任何明文 API Key）。
+    #[serde(default)]
+    pub brain: FayBrainView,
 }
 
-/// 请求 `CAP` 守门员评估并执行的宿主驱动动作。
+/// 请求 `CAP` 守门员评估并执行的宿主驱动动作（覆盖沙箱文件、系统剪贴板/通知、硬件遥测/语音/截屏与桌面软件唤起）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum RequestedHostAction {
@@ -200,9 +216,46 @@ pub enum RequestedHostAction {
         #[serde(default)]
         high_risk: bool,
     },
-    /// 在受控沙箱内执行白名单工作区检视命令（`process.exec`，固定高风险需 `Human Prime` 审批）。
+    /// 读取宿主系统剪贴板（`os.clipboard`，常规风险）。
+    OsClipboardRead,
+    /// 写入宿主系统剪贴板（`os.clipboard`，常规风险）。
+    OsClipboardWrite {
+        /// 待写入剪贴板的文本。
+        text: String,
+    },
+    /// 发送原生桌面系统通知（`os.notify`，常规风险）。
+    OsNotify {
+        /// 通知标题。
+        title: String,
+        /// 通知正文。
+        body: String,
+    },
+    /// 采集实时硬件与电池电源遥测（`hardware.telemetry`，常规风险）。
+    HardwareTelemetry,
+    /// 调用宿主扬声器语音播报（`hardware.audio`，常规风险，限长 `<= 240` 字符）。
+    HardwareSpeak {
+        /// 待朗读文本。
+        text: String,
+    },
+    /// 抓取宿主真实屏幕截图（`hardware.screen`，固定高风险需 `Human Prime` `CAP` 审批）。
+    HardwareScreenCapture {
+        /// 截图场景标签。
+        label: String,
+    },
+    /// 唤起受控白名单桌面应用（`app.control`，固定高风险需 `Human Prime` `CAP` 审批）。
+    AppControl {
+        /// 目标应用名称（如 `Calculator`、`Notes`、`Safari`）。
+        app_name: String,
+        /// 动作类型（默认 `"launch"`，测试支持 `"verify_installed"`）。
+        #[serde(default)]
+        action: String,
+        /// 可选打开的 `http(s)://` 地址。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_url: Option<String>,
+    },
+    /// 在受控沙箱内执行白名单工作区/只读系统检视命令（`process.exec`，固定高风险需 `Human Prime` 审批）。
     ProcessExec {
-        /// 受控命令标识（如 `workspace.ls`、`workspace.digest`、`workspace.inspect`）。
+        /// 受控命令标识（如 `workspace.ls`、`uname`、`sw_vers`、`uptime`、`df`）。
         command: String,
     },
     /// 采集受控摄像头快照（`media.camera`，固定高风险需 `Human Prime` 审批）。
@@ -219,6 +272,12 @@ impl RequestedHostAction {
         match self {
             Self::FsRead { .. } => "fs.read",
             Self::FsWrite { .. } => "fs.write",
+            Self::OsClipboardRead | Self::OsClipboardWrite { .. } => "os.clipboard",
+            Self::OsNotify { .. } => "os.notify",
+            Self::HardwareTelemetry => "hardware.telemetry",
+            Self::HardwareSpeak { .. } => "hardware.audio",
+            Self::HardwareScreenCapture { .. } => "hardware.screen",
+            Self::AppControl { .. } => "app.control",
             Self::ProcessExec { .. } => "process.exec",
             Self::CameraSnapshot { .. } => "media.camera",
         }
@@ -228,7 +287,12 @@ impl RequestedHostAction {
     #[must_use]
     pub fn requires_human_confirmation(&self) -> bool {
         match self {
-            Self::FsRead { .. } => false,
+            Self::FsRead { .. }
+            | Self::OsClipboardRead
+            | Self::OsClipboardWrite { .. }
+            | Self::OsNotify { .. }
+            | Self::HardwareTelemetry
+            | Self::HardwareSpeak { .. } => false,
             Self::FsWrite {
                 path, high_risk, ..
             } => {
@@ -241,7 +305,10 @@ impl RequestedHostAction {
                     })
                     || path.starts_with("config/")
             }
-            Self::ProcessExec { .. } | Self::CameraSnapshot { .. } => true,
+            Self::HardwareScreenCapture { .. }
+            | Self::AppControl { .. }
+            | Self::ProcessExec { .. }
+            | Self::CameraSnapshot { .. } => true,
         }
     }
 
@@ -253,6 +320,17 @@ impl RequestedHostAction {
             Self::FsWrite { path, content, .. } => {
                 format!("sandbox://{path} ({} bytes)", content.len())
             }
+            Self::OsClipboardRead => "os://clipboard/read".to_owned(),
+            Self::OsClipboardWrite { text } => {
+                format!("os://clipboard/write ({} bytes)", text.len())
+            }
+            Self::OsNotify { title, .. } => format!("os://notify/{title}"),
+            Self::HardwareTelemetry => "hardware://telemetry/battery+system".to_owned(),
+            Self::HardwareSpeak { text } => {
+                format!("hardware://audio/speak ({} chars)", text.chars().count())
+            }
+            Self::HardwareScreenCapture { label } => format!("hardware://screen/{label}"),
+            Self::AppControl { app_name, .. } => format!("app://{app_name}"),
             Self::ProcessExec { command } => format!("exec://{command}"),
             Self::CameraSnapshot { label } => format!("camera://{label}"),
         }
@@ -355,6 +433,9 @@ pub struct DashboardSnapshot {
     pub audit_entries: Vec<HashChainedAuditEntry>,
     /// 当前本机回环 `GMChain` / `MeriToken` 协同配置状态。
     pub merit_config: MeritConfigView,
+    /// 当前操作系统全部标准能力的原生工具与隐私权限就绪列表。
+    #[serde(default)]
+    pub os_permissions: Vec<OsPermissionItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -582,6 +663,7 @@ impl FayGerEngine {
             chat_history: Vec::new(),
             loaded_at_unix: unix_now_secs(),
             merit_pocket,
+            brain: FayBrainConfig::default(),
         };
         let view = self.to_instance_view(&stored);
         self.data.fays.insert(fay_id.clone(), stored);
@@ -770,121 +852,165 @@ impl FayGerEngine {
         self.enforce_liveness()?;
         let canonical_id = self.resolve_fay_key(fay_id)?;
         let clean_msg = message.trim();
-        let inferred_action = explicit_action.or_else(|| parse_slash_host_action(clean_msg));
-        let mentions_merit = inferred_action.is_none() && message_mentions_merit(clean_msg);
-        if mentions_merit {
-            let _ = self.sync_single_fay_merit_best_effort(&canonical_id);
-        }
-
         let stored_snapshot = self.get_fay(&canonical_id)?.clone();
         let effective_caps = self.compute_effective_capabilities(&stored_snapshot);
         let ego_endpoint = self.host_pool.ego_endpoint.clone();
         let is_cofay = stored_snapshot.metadata.kind == SoulKind::Cofay;
 
-        let (draft_reply, mut annotations, audit_stage, audit_detail) = if let Some(action) =
-            inferred_action
-        {
-            self.evaluate_and_run_host_action(&stored_snapshot, &effective_caps, &action)?
-        } else {
-            let tp_items = self.collect_tp_context_for_fay(&canonical_id);
-            let mut rows = vec![
-                CtxKeyValue {
-                    key: "faying_state".to_owned(),
-                    value: stored_snapshot.faying_state.as_str().to_owned(),
-                },
-                CtxKeyValue {
-                    key: "effective_capabilities".to_owned(),
-                    value: if effective_caps.is_empty() {
-                        "(none)".to_owned()
+        // 当显式传入 host_action、输入以 `/` 开头，或未启用外部大模型时，优先解析确定性斜杠/自然语言宿主指令。
+        let direct_action = explicit_action.or_else(|| {
+            if clean_msg.starts_with('/') || !stored_snapshot.brain.external_llm.enabled {
+                parse_slash_host_action(clean_msg)
+            } else {
+                None
+            }
+        });
+        let mentions_merit = direct_action.is_none() && message_mentions_merit(clean_msg);
+        if mentions_merit {
+            let _ = self.sync_single_fay_merit_best_effort(&canonical_id);
+        }
+        let stored_snapshot = self.get_fay(&canonical_id)?.clone();
+
+        let (final_summary_text, final_ego_trace, mut annotations, audit_stage, audit_detail) =
+            if let Some(action) = direct_action {
+                let (draft_reply, anns, stage, detail) =
+                    self.evaluate_and_run_host_action(&stored_snapshot, &effective_caps, &action)?;
+                let ego_out = run_ego_three_in_one(
+                    &ego_endpoint,
+                    &canonical_id,
+                    &stored_snapshot.metadata.display_name,
+                    is_cofay,
+                    clean_msg,
+                    &effective_caps,
+                    &draft_reply,
+                );
+                (ego_out.guarded_reply, ego_out.trace, anns, stage, detail)
+            } else {
+                let tp_items = self.collect_tp_context_for_fay(&canonical_id);
+                let mut rows = vec![
+                    CtxKeyValue {
+                        key: "faying_state".to_owned(),
+                        value: stored_snapshot.faying_state.as_str().to_owned(),
+                    },
+                    CtxKeyValue {
+                        key: "effective_capabilities".to_owned(),
+                        value: if effective_caps.is_empty() {
+                            "(none)".to_owned()
+                        } else {
+                            effective_caps.join(", ")
+                        },
+                    },
+                    CtxKeyValue {
+                        key: "embodiment_mode".to_owned(),
+                        value: stored_snapshot.embodiment.embodiment_mode.clone(),
+                    },
+                    CtxKeyValue {
+                        key: "tp_shared_entries".to_owned(),
+                        value: tp_items.len().to_string(),
+                    },
+                ];
+                for (k, v) in tp_items.iter().take(3) {
+                    rows.push(CtxKeyValue {
+                        key: format!("tp:{k}"),
+                        value: v.clone(),
+                    });
+                }
+                let standing = stored_snapshot
+                    .merit_pocket
+                    .to_standing_view(&canonical_id, &self.data.gmchain_endpoint);
+                let mut draft = format!(
+                    "[{}] Received: \"{}\". Effective capabilities (BuF ∩ HostPool ∩ Policy): [{}]. Shared TP facts visible: {}.",
+                    stored_snapshot.metadata.display_name,
+                    clean_msg,
+                    if effective_caps.is_empty() {
+                        "none".to_owned()
                     } else {
                         effective_caps.join(", ")
                     },
-                },
-                CtxKeyValue {
-                    key: "embodiment_mode".to_owned(),
-                    value: stored_snapshot.embodiment.embodiment_mode.clone(),
-                },
-                CtxKeyValue {
-                    key: "tp_shared_entries".to_owned(),
-                    value: tp_items.len().to_string(),
-                },
-            ];
-            for (k, v) in tp_items.iter().take(3) {
-                rows.push(CtxKeyValue {
-                    key: format!("tp:{k}"),
-                    value: v.clone(),
-                });
-            }
-            let standing = stored_snapshot
-                .merit_pocket
-                .to_standing_view(&canonical_id, &self.data.gmchain_endpoint);
-            let mut draft = format!(
-                "[{}] Received: \"{}\". Effective capabilities (BuF ∩ HostPool ∩ Policy): [{}]. Shared TP facts visible: {}.",
-                stored_snapshot.metadata.display_name,
-                clean_msg,
-                if effective_caps.is_empty() {
-                    "none".to_owned()
-                } else {
-                    effective_caps.join(", ")
-                },
-                tp_items.len()
-            );
-            let mut anns = vec![
-                CtxAnnotation::StatusBadge {
-                    label: "Faying Lifecycle".to_owned(),
-                    value: stored_snapshot.faying_state.as_str().to_owned(),
-                    tone: if stored_snapshot.faying_state == FayingState::Faying {
-                        "ok".to_owned()
-                    } else {
-                        "warn".to_owned()
-                    },
-                },
-                CtxAnnotation::KvTable {
-                    title: "Runtime Context & Capability Intersection".to_owned(),
-                    rows,
-                },
-            ];
-            if mentions_merit {
-                let _ = write!(
-                    draft,
-                    " MeriToken standing: curMerit={} μ, consumable={} μ (curMerit - minMerit), minMerit floor={} μ [{}].",
-                    standing.cur_merit_formatted,
-                    standing.consumable_merit_formatted,
-                    standing.min_merit_floor_formatted,
-                    standing.sync_mode
+                    tp_items.len()
                 );
-                anns.push(CtxAnnotation::MeritStandingCard {
-                    fay_id: canonical_id.clone(),
-                    cur_merit_mu: format!("{} μ", standing.cur_merit_formatted),
-                    consumable_merit_mu: format!("{} μ", standing.consumable_merit_formatted),
-                    min_merit_floor_mu: format!("{} μ", standing.min_merit_floor_formatted),
-                    sync_mode: standing.sync_mode,
-                    block_height: standing.last_block_height,
-                    state_root_hex: standing.last_state_root_hex,
-                });
-            }
-            (
-                draft,
-                anns,
-                "icp_dialogue_turn",
-                json!({
-                    "fay_id": canonical_id,
-                    "faying_state": stored_snapshot.faying_state.as_str(),
-                    "tp_context_count": tp_items.len(),
-                    "merit_card_attached": mentions_merit,
-                }),
-            )
-        };
+                let mut anns = vec![
+                    CtxAnnotation::StatusBadge {
+                        label: "Faying Lifecycle".to_owned(),
+                        value: stored_snapshot.faying_state.as_str().to_owned(),
+                        tone: if stored_snapshot.faying_state == FayingState::Faying {
+                            "ok".to_owned()
+                        } else {
+                            "warn".to_owned()
+                        },
+                    },
+                    CtxAnnotation::KvTable {
+                        title: "Runtime Context & Capability Intersection".to_owned(),
+                        rows,
+                    },
+                ];
+                if mentions_merit {
+                    let _ = write!(
+                        draft,
+                        " MeriToken standing: curMerit={} μ, consumable={} μ (curMerit - minMerit), minMerit floor={} μ [{}].",
+                        standing.cur_merit_formatted,
+                        standing.consumable_merit_formatted,
+                        standing.min_merit_floor_formatted,
+                        standing.sync_mode
+                    );
+                    anns.push(CtxAnnotation::MeritStandingCard {
+                        fay_id: canonical_id.clone(),
+                        cur_merit_mu: format!("{} μ", standing.cur_merit_formatted),
+                        consumable_merit_mu: format!("{} μ", standing.consumable_merit_formatted),
+                        min_merit_floor_mu: format!("{} μ", standing.min_merit_floor_formatted),
+                        sync_mode: standing.sync_mode,
+                        block_height: standing.last_block_height,
+                        state_root_hex: standing.last_state_root_hex,
+                    });
+                }
 
-        let ego_out = run_ego_three_in_one(
-            &ego_endpoint,
-            &canonical_id,
-            &stored_snapshot.metadata.display_name,
-            is_cofay,
-            clean_msg,
-            &effective_caps,
-            &draft_reply,
-        );
+                let brain_turn = orchestrate_brain_turn(
+                    &self.state_dir,
+                    &stored_snapshot.brain,
+                    &ego_endpoint,
+                    &canonical_id,
+                    &stored_snapshot.metadata.display_name,
+                    is_cofay,
+                    stored_snapshot.faying_state.as_str(),
+                    &effective_caps,
+                    clean_msg,
+                    &draft,
+                );
+
+                // 第 4 步：若外部大模型通过 <fay_action> 提议了宿主动作（或自然语言触发），送入同一套 Faying + CAP 门禁流水线！
+                let llm_or_nat_action = brain_turn
+                    .proposed_action_json
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<RequestedHostAction>(v.clone()).ok())
+                    .or_else(|| parse_slash_host_action(clean_msg));
+
+                if let Some(bridged_action) = llm_or_nat_action {
+                    let (act_summary, mut act_anns, stage, detail) = self
+                        .evaluate_and_run_host_action(
+                            &stored_snapshot,
+                            &effective_caps,
+                            &bridged_action,
+                        )?;
+                    anns.append(&mut act_anns);
+                    let combined = format!("{} — {}", brain_turn.reply_text, act_summary);
+                    (combined, brain_turn.ego_trace, anns, stage, detail)
+                } else {
+                    let brain_mode = brain_turn.ego_trace.mode.clone();
+                    (
+                        brain_turn.reply_text,
+                        brain_turn.ego_trace,
+                        anns,
+                        "icp_dialogue_turn",
+                        json!({
+                            "fay_id": canonical_id,
+                            "faying_state": stored_snapshot.faying_state.as_str(),
+                            "brain_mode": brain_mode,
+                            "tp_context_count": tp_items.len(),
+                            "merit_card_attached": mentions_merit,
+                        }),
+                    )
+                }
+            };
 
         let msg_entropy = fresh_entropy_32();
         let env = CtxEnvelope {
@@ -894,8 +1020,8 @@ impl FayGerEngine {
             fay_id: canonical_id.clone(),
             fay_kind: stored_snapshot.metadata.kind.as_str().to_owned(),
             faying_state: stored_snapshot.faying_state.as_str().to_owned(),
-            summary_text: ego_out.guarded_reply,
-            ego_trace: ego_out.trace,
+            summary_text: final_summary_text,
+            ego_trace: final_ego_trace,
             annotations: std::mem::take(&mut annotations),
         };
         let terminal_text = render_ctx_terminal(&env);
@@ -1002,6 +1128,7 @@ impl FayGerEngine {
         let ticket_id = format!("CAP-CONFIRMED-{approval_id}");
         let (exec_summary, artifact_ann, output_sha256) = execute_sandboxed_action(
             Path::new(&stored_fay.sandbox_dir),
+            &self.host_pool,
             &item_snapshot.action,
             &ticket_id,
         )?;
@@ -1781,6 +1908,95 @@ impl FayGerEngine {
         }
     }
 
+    /// 查询指定 `Fay` 实例的对外脱敏大脑配置（`GET /api/v1/fays/<id>/brain`）。
+    pub fn get_fay_brain(&mut self, id_or_instance: &str) -> Result<FayBrainView, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+        let stored = self.get_fay(&canonical_id)?;
+        Ok(stored.brain.to_view(&self.state_dir))
+    }
+
+    /// 更新指定 `Fay` 实例的 `ExternalLlmConfig` + `EgoBindingConfig`（自动将 `api_key` 加密存入 `FayID` 保险箱并写入审计链）。
+    pub fn update_fay_brain(
+        &mut self,
+        id_or_instance: &str,
+        body: &Value,
+    ) -> Result<FayBrainView, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+        let state_dir = self.state_dir.clone();
+        let view = {
+            let stored_mut = self.get_fay_mut(&canonical_id)?;
+            let inst_id = stored_mut.instance_id.clone();
+            apply_brain_update_json(
+                &state_dir,
+                &inst_id,
+                &canonical_id,
+                &mut stored_mut.brain,
+                body,
+            )?;
+            stored_mut.brain.to_view(&state_dir)
+        };
+        self.append_audit(
+            "brain.configured",
+            json!({
+                "fay_id": canonical_id,
+                "llm_enabled": view.external_llm.enabled,
+                "llm_provider": view.external_llm.provider,
+                "llm_model": view.external_llm.model,
+                "has_api_key": view.external_llm.has_api_key,
+                "ego_mode": view.ego.mode,
+            }),
+        )?;
+        self.save()?;
+        Ok(view)
+    }
+
+    /// 对指定 `Fay` 实例执行 `Ego` + 外部大模型连通性自检（`POST /api/v1/fays/<id>/brain/test`）。
+    pub fn test_fay_brain(&mut self, id_or_instance: &str) -> Result<BrainTestReport, CliError> {
+        self.enforce_liveness()?;
+        let canonical_id = self.resolve_fay_key(id_or_instance)?;
+        let stored = self.get_fay(&canonical_id)?;
+        Ok(test_brain_connectivity(
+            &self.state_dir,
+            &stored.brain,
+            &stored.metadata.display_name,
+        ))
+    }
+
+    /// 探测当前操作系统全部宿主能力的原生工具与隐私授权状态（`GET /api/v1/os/permissions`）。
+    #[must_use]
+    pub fn get_os_permissions(&self) -> Vec<OsPermissionItem> {
+        probe_os_permissions(&self.host_pool)
+    }
+
+    /// 执行合法的操作系统权限探测/触发，可选打开系统隐私设置并同步加入 `HostResourcePool`（`POST /api/v1/os/permissions/request`）。
+    pub fn request_os_permission(
+        &mut self,
+        capability: &str,
+        open_settings: bool,
+        grant_to_host_pool: bool,
+    ) -> Result<OsPermissionRequestReceipt, CliError> {
+        let clean = capability.trim().to_owned();
+        if grant_to_host_pool {
+            self.host_pool.granted_capabilities.insert(clean.clone());
+            self.host_pool.save(&self.state_dir)?;
+        }
+        let in_pool = self.host_pool.granted_capabilities.contains(&clean);
+        let receipt = request_os_permission_native(&clean, open_settings, in_pool)?;
+        self.append_audit(
+            "os.permission_requested",
+            json!({
+                "capability": receipt.capability,
+                "status": receipt.status,
+                "settings_opened": receipt.settings_opened,
+                "granted_to_host_pool": receipt.granted_to_host_pool,
+            }),
+        )?;
+        self.save()?;
+        Ok(receipt)
+    }
+
     /// 组装供控制台渲染的全量 [`DashboardSnapshot`]。
     pub fn snapshot(&mut self, probe_ego_network: bool) -> Result<DashboardSnapshot, CliError> {
         self.enforce_liveness()?;
@@ -1810,6 +2026,7 @@ impl FayGerEngine {
                 synced_fays: fays.len(),
             }
         };
+        let os_permissions = self.get_os_permissions();
 
         Ok(DashboardSnapshot {
             fayger_version: crate::FAYGER_VERSION.to_owned(),
@@ -1823,6 +2040,7 @@ impl FayGerEngine {
             chain_head_hash: head,
             audit_entries: self.data.audit_entries.clone(),
             merit_config,
+            os_permissions,
         })
     }
 
@@ -1962,6 +2180,21 @@ impl FayGerEngine {
             ));
         }
 
+        // 预校验高风险参数合法性（阻断非法应用名或非白名单命令进入 CAP 挂起池）
+        match action {
+            RequestedHostAction::AppControl {
+                app_name,
+                target_url,
+                ..
+            } => {
+                let _ = validate_app_control_params(app_name, target_url.as_deref())?;
+            }
+            RequestedHostAction::ProcessExec { command } => {
+                let _ = validate_process_exec_command(command)?;
+            }
+            _ => {}
+        }
+
         // 第 3 道门：按风险等级分流（常规沙箱执行 vs 高风险生成 ICP CAP Approval Card 挂起待批）
         if action.requires_human_confirmation() {
             let action_val = serde_json::to_value(action).unwrap_or_else(|_| json!({}));
@@ -2020,8 +2253,12 @@ impl FayGerEngine {
             .active_mandate
             .as_ref()
             .map_or("FAYING-ROUTINE-TICKET", |m| m.mandate_id.as_str());
-        let (summary, artifact_ann, output_sha256) =
-            execute_sandboxed_action(Path::new(&stored.sandbox_dir), action, mandate_ticket)?;
+        let (summary, artifact_ann, output_sha256) = execute_sandboxed_action(
+            Path::new(&stored.sandbox_dir),
+            &self.host_pool,
+            action,
+            mandate_ticket,
+        )?;
 
         if let Some(fay_mut) = self.data.fays.get_mut(&stored.metadata.fay_id) {
             fay_mut.pending_sync_deltas = fay_mut.pending_sync_deltas.saturating_add(1);
@@ -2081,6 +2318,7 @@ impl FayGerEngine {
             merit: stored
                 .merit_pocket
                 .to_standing_view(&stored.metadata.fay_id, &self.data.gmchain_endpoint),
+            brain: stored.brain.to_view(&self.state_dir),
         }
     }
 
@@ -2207,8 +2445,9 @@ impl FayGerEngine {
     }
 }
 
-/// 解析聊天消息中的快捷宿主命令（如 `/write note.txt hello`、`/read note.txt`、`/exec workspace.ls`、`/camera desk`）。
+/// 解析聊天消息中的快捷斜杠宿主命令或自然语言软硬件操控意图。
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn parse_slash_host_action(message: &str) -> Option<RequestedHostAction> {
     let trimmed = message.trim();
     if let Some(rest) = trimmed.strip_prefix("/read ") {
@@ -2235,6 +2474,60 @@ pub fn parse_slash_host_action(message: &str) -> Option<RequestedHostAction> {
             high_risk: true,
         });
     }
+    if trimmed == "/hardware" || trimmed == "/telemetry" {
+        return Some(RequestedHostAction::HardwareTelemetry);
+    }
+    if trimmed == "/clipboard-read" {
+        return Some(RequestedHostAction::OsClipboardRead);
+    }
+    if let Some(rest) = trimmed.strip_prefix("/clipboard-write ") {
+        let text = rest.trim();
+        if !text.is_empty() {
+            return Some(RequestedHostAction::OsClipboardWrite {
+                text: text.to_owned(),
+            });
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("/notify ") {
+        let raw = rest.trim();
+        if !raw.is_empty() {
+            let (title, body) = raw
+                .split_once('|')
+                .map_or(("FayGer Notification", raw), |(t, b)| (t.trim(), b.trim()));
+            return Some(RequestedHostAction::OsNotify {
+                title: title.to_owned(),
+                body: body.to_owned(),
+            });
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("/speak ") {
+        let text = rest.trim();
+        if !text.is_empty() {
+            return Some(RequestedHostAction::HardwareSpeak {
+                text: text.to_owned(),
+            });
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("/screenshot") {
+        let label = rest.trim();
+        return Some(RequestedHostAction::HardwareScreenCapture {
+            label: if label.is_empty() {
+                "desktop".to_owned()
+            } else {
+                label.to_owned()
+            },
+        });
+    }
+    if let Some(rest) = trimmed.strip_prefix("/open ") {
+        let app_name = rest.trim();
+        if !app_name.is_empty() {
+            return Some(RequestedHostAction::AppControl {
+                app_name: app_name.to_owned(),
+                action: "launch".to_owned(),
+                target_url: None,
+            });
+        }
+    }
     if let Some(rest) = trimmed.strip_prefix("/exec ") {
         let cmd = rest.trim();
         if !cmd.is_empty() {
@@ -2253,12 +2546,83 @@ pub fn parse_slash_host_action(message: &str) -> Option<RequestedHostAction> {
             },
         });
     }
+
+    // 自然语言中文快捷触发（便于无外接模型离线直连体验）
+    if trimmed.contains("查看电池")
+        || trimmed.contains("硬件状态")
+        || trimmed.contains("传感器遥测")
+    {
+        return Some(RequestedHostAction::HardwareTelemetry);
+    }
+    if trimmed == "读取剪贴板" || trimmed.starts_with("读取系统剪贴板") {
+        return Some(RequestedHostAction::OsClipboardRead);
+    }
+    if let Some(text) = trimmed
+        .strip_prefix("写入剪贴板：")
+        .or_else(|| trimmed.strip_prefix("写入剪贴板:"))
+    {
+        let clean = text.trim();
+        if !clean.is_empty() {
+            return Some(RequestedHostAction::OsClipboardWrite {
+                text: clean.to_owned(),
+            });
+        }
+    }
+    if let Some(body) = trimmed
+        .strip_prefix("发送系统通知：")
+        .or_else(|| trimmed.strip_prefix("发送系统通知:"))
+    {
+        let clean = body.trim();
+        if !clean.is_empty() {
+            return Some(RequestedHostAction::OsNotify {
+                title: "FayGer Notification".to_owned(),
+                body: clean.to_owned(),
+            });
+        }
+    }
+    if let Some(text) = trimmed
+        .strip_prefix("语音播报：")
+        .or_else(|| trimmed.strip_prefix("语音播报:"))
+    {
+        let clean = text.trim();
+        if !clean.is_empty() {
+            return Some(RequestedHostAction::HardwareSpeak {
+                text: clean.to_owned(),
+            });
+        }
+    }
+    if trimmed == "截屏" || trimmed.starts_with("抓取屏幕截图") {
+        return Some(RequestedHostAction::HardwareScreenCapture {
+            label: "desktop".to_owned(),
+        });
+    }
+    if trimmed == "打开计算器" {
+        return Some(RequestedHostAction::AppControl {
+            app_name: "Calculator".to_owned(),
+            action: "launch".to_owned(),
+            target_url: None,
+        });
+    }
+    if let Some(app) = trimmed
+        .strip_prefix("打开软件 ")
+        .or_else(|| trimmed.strip_prefix("打开应用 "))
+    {
+        let clean = app.trim();
+        if !clean.is_empty() {
+            return Some(RequestedHostAction::AppControl {
+                app_name: clean.to_owned(),
+                action: "launch".to_owned(),
+                target_url: None,
+            });
+        }
+    }
     None
 }
 
 #[allow(clippy::too_many_lines)]
 fn execute_sandboxed_action(
     sandbox_dir: &Path,
+    host_pool: &HostResourcePoolConfig,
     action: &RequestedHostAction,
     approval_ticket: &str,
 ) -> Result<(String, CtxAnnotation, String), CliError> {
@@ -2266,6 +2630,38 @@ fn execute_sandboxed_action(
         path: sandbox_dir.display().to_string(),
         detail: err.to_string(),
     })?;
+
+    match action {
+        RequestedHostAction::OsClipboardRead => return exec_clipboard_read(sandbox_dir),
+        RequestedHostAction::OsClipboardWrite { text } => {
+            return exec_clipboard_write(sandbox_dir, text);
+        }
+        RequestedHostAction::OsNotify { title, body } => {
+            return exec_os_notify(sandbox_dir, title, body);
+        }
+        RequestedHostAction::HardwareTelemetry => {
+            return exec_hardware_telemetry(sandbox_dir, host_pool);
+        }
+        RequestedHostAction::HardwareSpeak { text } => {
+            return exec_hardware_speak(sandbox_dir, text)
+        }
+        RequestedHostAction::HardwareScreenCapture { label } => {
+            return exec_hardware_screen_capture(sandbox_dir, label);
+        }
+        RequestedHostAction::AppControl {
+            app_name,
+            action: act_mode,
+            target_url,
+        } => {
+            return exec_app_control(sandbox_dir, app_name, act_mode, target_url.as_deref());
+        }
+        RequestedHostAction::ProcessExec { command } => {
+            return exec_controlled_process(sandbox_dir, command);
+        }
+        RequestedHostAction::FsRead { .. }
+        | RequestedHostAction::FsWrite { .. }
+        | RequestedHostAction::CameraSnapshot { .. } => {}
+    }
 
     let host_env = detect_host_environment();
     let host_policy = HostPolicy::allow_all(
@@ -2332,46 +2728,6 @@ fn execute_sandboxed_action(
                 content_sha,
             ))
         }
-        RequestedHostAction::ProcessExec { command } => {
-            let mut entries_list = Vec::new();
-            if let Ok(rd) = fs::read_dir(sandbox_dir) {
-                for entry in rd.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        entries_list.push(name.to_owned());
-                    }
-                }
-            }
-            entries_list.sort();
-            let report = format!(
-                "controlled_exec={command}\nsandbox_entries={}\nfiles=[{}]\ntimestamp={}\n",
-                entries_list.len(),
-                entries_list.join(", "),
-                unix_now_secs()
-            );
-            let log_rel = "exec_reports/last_exec.log".to_owned();
-            let _ = execute_controlled_syscall(
-                &reg,
-                &RealSyscallRequest::ControlledFsWrite {
-                    relative_path: log_rel.clone(),
-                    contents: report.as_bytes().to_vec(),
-                },
-                &syscall_policy,
-            )?;
-            let sha = hex_sha256(report.as_bytes());
-            Ok((
-                format!(
-                    "Executed controlled sandbox command '{command}' ({} files visible).",
-                    entries_list.len()
-                ),
-                CtxAnnotation::ArtifactPreview {
-                    title: format!("Sandboxed Exec Output ({command})"),
-                    path: log_rel,
-                    content_preview: report.trim().to_owned(),
-                    sha256: sha.clone(),
-                },
-                sha,
-            ))
-        }
         RequestedHostAction::CameraSnapshot { label } => {
             let now = unix_now_secs();
             let svg = format!(
@@ -2398,6 +2754,7 @@ fn execute_sandboxed_action(
                 sha,
             ))
         }
+        _ => Err(CliError::Usage("unreachable host action branch".to_owned())),
     }
 }
 
