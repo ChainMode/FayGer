@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(out.category, InstructionCategory::Net);
         assert_eq!(out.opcode, 5);
         assert_eq!(out.operands, vec![9, 9]);
-        assert!(out.capabilities_required.is_empty());
+        assert_eq!(out.capabilities_required.len(), 0);
     }
 
     #[test]
@@ -119,7 +119,7 @@ mod tests {
         assert_eq!(out.category, InstructionCategory::Io);
         assert_eq!(out.opcode, 0);
         assert_eq!(out.operands, vec![4, 5, 6]);
-        assert!(out.capabilities_required.is_empty());
+        assert_eq!(out.capabilities_required.len(), 0);
     }
 
     #[test]

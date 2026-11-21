@@ -455,7 +455,7 @@ mod tests {
         assert!(cofay_meta.fay_id.starts_with("cofay_"));
         assert!(cofay_meta.cofay_role_charter.is_some());
         let loaded_co = load(&cofay_bytes, &default_policy()).expect("load cofay");
-        assert!(!loaded_co.manifest.capabilities.is_empty());
+        assert_ne!(loaded_co.manifest.capabilities.len(), 0);
 
         let _ = fs::remove_dir_all(&dir);
     }

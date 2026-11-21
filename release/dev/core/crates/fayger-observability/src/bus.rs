@@ -177,7 +177,7 @@ mod tests {
         bus.subscribe(EventFilter::any(), collector(&s));
         assert!(bus.publish(EventDraft::debug("x", None)).is_none());
         assert_eq!(bus.clock(), 0);
-        assert!(s.borrow().is_empty());
+        assert_eq!(s.borrow().len(), 0);
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         bus.publish(EventDraft::lifecycle("a", "b", 1))
             .expect("delivered");
         assert_eq!(bus.clock(), 1);
-        assert!(s.borrow().is_empty());
+        assert_eq!(s.borrow().len(), 0);
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         assert!(!bus.unsubscribe(id1));
         bus.publish(EventDraft::lifecycle("a", "b", 1))
             .expect("delivered");
-        assert!(s1.borrow().is_empty());
+        assert_eq!(s1.borrow().len(), 0);
         assert_eq!(s2.borrow().len(), 1);
     }
 }

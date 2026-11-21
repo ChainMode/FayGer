@@ -57,6 +57,6 @@ mod tests {
     #[test]
     fn default_is_empty() {
         let a = MockAdapter::default();
-        assert!(a.received.is_empty());
+        assert_eq!(a.received.len(), 0);
     }
 }

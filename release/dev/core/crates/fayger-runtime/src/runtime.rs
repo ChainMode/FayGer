@@ -768,7 +768,7 @@ mod tests {
         let id = r.load(object_with_sections(vec![])).unwrap();
         let sink = subscribe_all(&mut r);
         assert!(r.start(id).is_err()); // Loaded 收 Start 非法
-        assert!(sink.borrow().is_empty());
+        assert_eq!(sink.borrow().len(), 0);
     }
 
     #[test]

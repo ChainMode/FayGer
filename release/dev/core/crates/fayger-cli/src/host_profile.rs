@@ -143,7 +143,7 @@ mod tests {
     fn unknown_os_has_no_match() {
         // 空 platform_id + 无 os_kind 命中 + 无可用能力 → 无适配器匹配。
         let host = build_host_environment("plan9", "x86_64");
-        assert!(host.platform_id.is_empty());
+        assert_eq!(host.platform_id.len(), 0);
         let err = render_info(&host).expect_err("no match");
         match err {
             crate::error::CliError::Failure(e) => {

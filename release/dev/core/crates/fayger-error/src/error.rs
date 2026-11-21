@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(err.code, ErrorCode::LdrParseFail);
         assert_eq!(err.source_layer, Layer::Loader);
         assert_eq!(err.message, "boom");
-        assert!(err.context.is_empty());
+        assert_eq!(err.context.len(), 0);
         assert!(err.cause.is_none());
     }
 

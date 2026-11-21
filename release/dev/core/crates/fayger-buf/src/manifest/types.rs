@@ -207,9 +207,9 @@ mod tests {
     #[test]
     fn profile_constraints_default_is_empty() {
         let pc = ProfileConstraints::default();
-        assert!(pc.required_capabilities.is_empty());
+        assert_eq!(pc.required_capabilities.len(), 0);
         assert!(pc.max_size.is_none());
-        assert!(pc.required_features.is_empty());
+        assert_eq!(pc.required_features.len(), 0);
     }
 
     #[test]

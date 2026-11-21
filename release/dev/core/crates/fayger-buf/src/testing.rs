@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn section_sample_has_consistent_id_and_payload() {
         let s = sample(arb_section());
-        assert!(!s.id.is_empty());
+        assert_ne!(s.id.len(), 0);
         assert!(s.payload.len() <= 1024);
     }
 

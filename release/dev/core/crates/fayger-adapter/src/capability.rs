@@ -110,8 +110,8 @@ mod tests {
             &caps(&["a"]),
             &HostPolicy::allow_all(["a"]),
         );
-        assert!(r.granted.is_empty());
-        assert!(r.denied.is_empty());
+        assert_eq!(r.granted.len(), 0);
+        assert_eq!(r.denied.len(), 0);
     }
 
     #[test]
@@ -123,7 +123,7 @@ mod tests {
             &HostPolicy::allow_all(["a", "b"]),
         );
         assert_eq!(r.granted, requested);
-        assert!(r.denied.is_empty());
+        assert_eq!(r.denied.len(), 0);
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             &caps(&["x"]),
             &HostPolicy::allow_all(["a", "b"]),
         );
-        assert!(r.granted.is_empty());
+        assert_eq!(r.granted.len(), 0);
         assert_eq!(r.denied, requested);
     }
 

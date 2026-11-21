@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(report.final_state, LifecycleState::Terminated);
         assert_eq!(report.dispatched, 2);
         assert_eq!(report.failures, 2);
-        assert!(report.syscalls.is_empty());
+        assert_eq!(report.syscalls.len(), 0);
         // 无成功 syscall，platform_id 经探针取得仍为 native-desktop（探针无能力要求）。
         assert_eq!(report.platform_id, "native-desktop");
     }

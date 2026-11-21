@@ -276,7 +276,7 @@ mod tests {
         obj.sections.clear();
         let bytes = serialize(&obj).expect("serialize");
         let parsed = parse(&bytes).expect("parse");
-        assert!(parsed.sections.is_empty());
+        assert_eq!(parsed.sections.len(), 0);
     }
 
     #[test]

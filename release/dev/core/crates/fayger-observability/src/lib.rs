@@ -5,7 +5,7 @@
 //! [`EventFilter`] 订阅、取消订阅与调试开关。事件时间戳为内部逻辑时钟（单调非减）。
 //!
 //! 跨层错误**因果链**的能力（`wrap` / `chain` / `layer_chain` / `root_cause` / `depth`）作为
-//! 加性扩展落在 [`fayger_error::FaygerError`] 上（见该 crate），本 crate 不重复实现。
+//! 加性扩展落在 `fayger_error::FaygerError` 上（见该 crate），本 crate 不重复实现。
 //!
 //! 模块：
 //!

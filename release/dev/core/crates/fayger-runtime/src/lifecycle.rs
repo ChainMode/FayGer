@@ -140,7 +140,7 @@ mod tests {
     fn terminal_states_reject_every_command() {
         for &state in &[S::Terminated, S::Failed] {
             assert!(state.is_terminal());
-            assert!(state.allowed_commands().is_empty());
+            assert_eq!(state.allowed_commands().len(), 0);
             for &cmd in &ALL_COMMANDS {
                 assert!(
                     state.apply(cmd).is_none(),

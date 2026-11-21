@@ -681,7 +681,7 @@ mod tests {
         let time_res =
             execute_controlled_syscall(&server_reg, &RealSyscallRequest::HostTimeNow, &policy)
                 .expect("time.now");
-        assert!(!time_res.output_bytes.is_empty());
+        assert_ne!(time_res.output_bytes.len(), 0);
 
         let _ = fs::remove_dir_all(&ws);
     }

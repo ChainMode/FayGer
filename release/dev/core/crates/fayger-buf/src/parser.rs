@@ -689,8 +689,8 @@ mod tests {
     fn parses_buf_with_zero_sections() {
         let (bytes, _manifest, _) = build_buf_bytes(vec![]);
         let obj = parse(&bytes).expect("parse ok");
-        assert!(obj.sections.is_empty());
-        assert!(obj.manifest.sections.is_empty());
+        assert_eq!(obj.sections.len(), 0);
+        assert_eq!(obj.manifest.sections.len(), 0);
     }
 
     // ---- 错误条件覆盖 ----
@@ -953,7 +953,7 @@ mod tests {
         // manifest 与完整解析一致
         assert_eq!(obj.manifest, manifest);
         // sections 为空（Lazy 按需填充）
-        assert!(obj.sections.is_empty());
+        assert_eq!(obj.sections.len(), 0);
         // header/trailer 与完整解析一致
         assert_eq!(obj.raw_header, full.raw_header);
         assert_eq!(obj.raw_trailer, full.raw_trailer);

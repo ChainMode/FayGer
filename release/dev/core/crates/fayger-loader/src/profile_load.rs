@@ -468,7 +468,7 @@ mod tests {
         )
         .expect("load");
         assert_eq!(art.selected_ids(), &["code".to_string(), "gpu".to_string()]);
-        assert!(art.skipped().is_empty());
+        assert_eq!(art.skipped().len(), 0);
         assert_eq!(art.section("gpu").unwrap(), &[7, 8, 9]);
     }
 

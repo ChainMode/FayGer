@@ -285,7 +285,7 @@ mod tests {
         ]);
         let sel = select_sections(&m, &profile(&[], None, &[])).expect("ok");
         assert_eq!(sel.selected, vec!["a", "b"]);
-        assert!(sel.skipped.is_empty());
+        assert_eq!(sel.skipped.len(), 0);
     }
 
     #[test]
@@ -368,8 +368,8 @@ mod tests {
     fn empty_manifest_selects_nothing() {
         let m = manifest(vec![]);
         let sel = select_sections(&m, &profile(&[], None, &[])).expect("ok");
-        assert!(sel.selected.is_empty());
-        assert!(sel.skipped.is_empty());
+        assert_eq!(sel.selected.len(), 0);
+        assert_eq!(sel.skipped.len(), 0);
     }
 
     #[test]
