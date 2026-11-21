@@ -11,7 +11,6 @@ description = "Fayger 可观测性事件总线与跨层错误链 (蓝图 §6.5�
 workspace = true
 
 [dependencies]
-fayger-error = { path = "../fayger-error" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

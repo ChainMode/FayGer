@@ -127,7 +127,9 @@ mod tests {
         if std::env::var_os("FAYMANIFEST_REGEN").is_some() {
             std::fs::write(&path, &generated).expect("regenerate schema file");
         }
-        let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+        let on_disk = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         // 短消息，避免在失败时把整份 schema 打印出来。
         assert!(
             on_disk == generated,

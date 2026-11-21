@@ -377,7 +377,6 @@ dependencies = [
 name = "fayger-observability"
 version = "0.3.0-rc.1"
 dependencies = [
- "fayger-error",
  "proptest",
  "serde",
  "serde_json",
