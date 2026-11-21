@@ -412,8 +412,8 @@ mod tests {
             core::cmp::Ordering::Equal
         );
         // 相等当且仅当 cmp == Equal
-        assert!(v("1.2.3") == v("1.2.3"));
-        assert!(v("1.2.3") != v("1.2.4"));
+        assert_eq!(v("1.2.3"), v("1.2.3"));
+        assert_ne!(v("1.2.3"), v("1.2.4"));
     }
 
     #[test]
