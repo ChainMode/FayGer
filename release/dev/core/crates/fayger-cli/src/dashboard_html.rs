@@ -305,10 +305,11 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
     </div>
   </div>
   <div class="status-pills">
-    <span class="pill" id="hdr-version">fayger ...</span>
+    <span class="pill" id="hdr-version">fayger v0.3.1</span>
     <span class="pill ok" id="hdr-audit">Audit Chain: verifying...</span>
     <span class="pill" id="hdr-ego">Ego Slot: ...</span>
     <span class="pill merit-pill" id="hdr-merit">GMChain: ...</span>
+    <a href="/mobile" target="_blank" class="pill ok" style="text-decoration:none">📱 手机监护端 (/mobile)</a>
     <button class="btn secondary" onclick="refreshAll()">Refresh</button>
   </div>
 </header>
@@ -320,6 +321,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <button data-tab="tab-icp" onclick="switchTab('tab-icp', this)">4. ICP 富交互对话与 CAP 审批 · 终端软硬件操控</button>
   <button data-tab="tab-tp" onclick="switchTab('tab-tp', this)">5. 双 Fay 心灵感应协作间 (Telepathy TP)</button>
   <button id="nav-tab-merit" data-tab="tab-merit" onclick="switchTab('tab-merit', this)">6. 美誉值与优先权 (MeriToken)</button>
+  <button id="nav-tab-hardware" data-tab="tab-hardware" onclick="switchTab('tab-hardware', this)">7. 硬件终端附身舱 (Hardware)</button>
 </nav>
 
 <main>
@@ -532,7 +534,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
           </div>
           <div class="row" style="gap:6px;margin-top:6px">
             <span class="muted">沙箱与美誉快捷指令:</span>
-            <button class="btn secondary" onclick="fillPrompt('/write notes/todo.md Ship FayGer v0.3.0')">Routine Write</button>
+            <button class="btn secondary" onclick="fillPrompt('/write notes/todo.md Ship FayGer v0.3.1')">Routine Write</button>
             <button class="btn secondary" onclick="fillPrompt('/read notes/todo.md')">Routine Read</button>
             <button class="btn secondary" onclick="fillPrompt('/camera desk_view')">High-Risk Camera (CAP Hold)</button>
             <button class="btn secondary" onclick="fillPrompt('查询我的美誉值与投票优先权额度 μ')">Query MeriToken (μ)</button>
@@ -700,6 +702,31 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <div id="merit-history-box"></div>
     </div>
   </section>
+
+  <!-- TAB 7: Hardware Embodiment Hub (FHBP/1.0) -->
+  <section id="tab-hardware" class="tab-pane">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div class="row">
+          <label class="muted">选择附身分身 (iFay / coFay):</label>
+          <select id="hw-fay-select"></select>
+          <span class="muted">|</span>
+          <label class="muted">接入外部 C99 / FHBP 硬件节点:</label>
+          <input type="text" id="hw-connect-ep" placeholder="http://127.0.0.1:9100" value="http://127.0.0.1:9100" style="width:210px" />
+          <button class="btn secondary" onclick="connectExternalHardware()">接入节点 (FHBP/1.0)</button>
+        </div>
+        <div class="row">
+          <button class="btn brake" onclick="haltAllHardwareG0()">🛑 全硬件 G0 紧急停机</button>
+        </div>
+      </div>
+      <p class="muted" style="margin:6px 0 0">
+        支持 Tier A（无人机 / ROS2 机器人嵌入式 Linux）与 Tier B（遥控车 / 五轴机床 / 电影摇臂 C99 <code>FHBP/1.0</code> 桥接）。所有动作严格受 <code>Faying</code> 监护态 + <code>CAP Physical Safety Envelope</code> 物理安全包络与高危人工审批保护。
+      </p>
+      <div id="hw-feedback" style="margin-top:8px"></div>
+    </div>
+
+    <div class="grid-2" id="hw-devices-grid"></div>
+  </section>
 </main>
 
 <div id="toast"></div>
@@ -711,6 +738,7 @@ const KNOWN_CAPS = [
   "os.clipboard",
   "os.notify",
   "hardware.telemetry",
+  "hardware.actuate",
   "hardware.audio",
   "hardware.screen",
   "app.control",
@@ -755,6 +783,7 @@ async function refreshAll() {
     renderIcpTab();
     renderTpTab();
     renderMeritTab();
+    renderHardwareTab();
   } catch (e) {
     toast('Error: ' + e.message);
   }
@@ -1573,6 +1602,191 @@ async function submitMeritConsume() {
     await refreshAll();
   } catch (e) {
     fb.innerHTML = `<div class="ctx-alert"><b>宪章底值保护 / 状态守卫拦截</b>：${esc(e.message)}</div>`;
+    toast(e.message);
+  }
+}
+
+function getHardwarePresetButtons(d) {
+  if (d.device_id === 'drone_px4_01') {
+    return {
+      safeLabel: '安全起飞 takeoff 35m',
+      safeAction: 'takeoff',
+      safeParams: { altitude_m: 35, speed_mps: 6 },
+      overLabel: '越界测试: 超限高 300m (>120m)',
+      overAction: 'takeoff',
+      overParams: { altitude_m: 300 }
+    };
+  }
+  if (d.device_id === 'rccar_ackermann_01') {
+    return {
+      safeLabel: '安全巡航 drive +15° / 40%',
+      safeAction: 'drive_control',
+      safeParams: { steering_deg: 15, throttle_pct: 40 },
+      overLabel: '越界测试: 超速 95% (>60%)',
+      overAction: 'drive_control',
+      overParams: { steering_deg: 0, throttle_pct: 95 }
+    };
+  }
+  if (d.device_id === 'robot_arm_6dof_01') {
+    return {
+      safeLabel: '安全位姿 move_pose 500mm',
+      safeAction: 'move_pose',
+      safeParams: { reach_mm: 500, joint_speed_dps: 30 },
+      overLabel: '越界测试: 超臂展 1200mm (>850mm)',
+      overAction: 'move_pose',
+      overParams: { reach_mm: 1200, joint_speed_dps: 30 }
+    };
+  }
+  if (d.device_id === 'cnc_mill_5axis_01') {
+    return {
+      safeLabel: '启动主轴 8000 RPM [需CAP审批]',
+      safeAction: 'start_spindle',
+      safeParams: { spindle_rpm: 8000, feed_mm_min: 1200 },
+      overLabel: '越界测试: 超速 25000 RPM (>12000)',
+      overAction: 'start_spindle',
+      overParams: { spindle_rpm: 25000 }
+    };
+  }
+  if (d.device_id === 'camera_jib_pro_01') {
+    return {
+      safeLabel: '平滑运镜 sweep pan=45° tilt=20°',
+      safeAction: 'sweep_keyframe',
+      safeParams: { pan_deg: 45, tilt_deg: 20, angular_speed_dps: 18 },
+      overLabel: '越界测试: 超俯仰 85° (>60°)',
+      overAction: 'sweep_keyframe',
+      overParams: { pan_deg: 0, tilt_deg: 85, angular_speed_dps: 20 }
+    };
+  }
+  const act = (d.supported_actions && d.supported_actions[0]) || 'actuate';
+  const envKeys = Object.keys(d.envelope || {});
+  const safeParams = {};
+  const overParams = {};
+  if (envKeys.length > 0) {
+    const k = envKeys[0];
+    const b = d.envelope[k];
+    safeParams[k] = Number(((b.min + b.max) / 2).toFixed(1));
+    overParams[k] = b.max + 100;
+  }
+  return {
+    safeLabel: `执行 ${act} (包络内)`,
+    safeAction: act,
+    safeParams,
+    overLabel: `越界测试 (${act})`,
+    overAction: act,
+    overParams
+  };
+}
+
+function renderHardwareTab() {
+  const fays = STATE.fays || [];
+  const sel = document.getElementById('hw-fay-select');
+  const prev = sel.value;
+  sel.innerHTML = fays.map(f => `<option value="${esc(f.fay_id)}">${esc(f.display_name)} (${esc(f.faying_state)}) — ${esc(f.instance_id)}</option>`).join('');
+  if (prev && fays.some(f => f.fay_id === prev)) sel.value = prev;
+
+  const devs = STATE.hardware_devices || [];
+  const grid = document.getElementById('hw-devices-grid');
+  grid.innerHTML = devs.map(d => {
+    const isTierA = (d.integration_tier || '').startsWith('tier_a');
+    const tierBadge = isTierA ? 'Tier A Linux/ROS2' : 'Tier B C99 Bridge';
+    const stClass = d.current_state === 'ACTUATING' ? 'ok' : (d.current_state === 'READY' ? '' : 'danger');
+    const envSummary = Object.entries(d.envelope || {}).map(([k, b]) => `${k}: [${b.min}, ${b.max}]${b.unit ? ' ' + b.unit : ''}`).join(' · ');
+    const preset = getHardwarePresetButtons(d);
+    const safeJson = encodeURIComponent(JSON.stringify(preset.safeParams));
+    const overJson = encodeURIComponent(JSON.stringify(preset.overParams));
+
+    return `
+      <div class="card" style="margin-bottom:0">
+        <div class="row" style="justify-content:space-between;margin-top:0">
+          <div>
+            <strong>${esc(d.display_name)}</strong>
+            <code class="muted">${esc(d.device_id)}</code>
+          </div>
+          <div class="row" style="margin:0;gap:6px">
+            <span class="pill ${isTierA ? 'merit-pill' : 'warn'}">${tierBadge}</span>
+            <span class="pill ${stClass}">${esc(d.current_state)}</span>
+          </div>
+        </div>
+        <div class="muted" style="margin-top:6px">
+          附身分身: <b>${esc(d.embodied_fay_id || '未附身 (Detached)')}</b>
+          · 安全停机态: <code>${esc(d.safe_state_name)}</code>
+          ${d.bridge_endpoint ? ` · 实时固件桥: <code>${esc(d.bridge_endpoint)}</code>` : ' · 内置 FHBP/1.0 数字孪生'}
+        </div>
+        <div class="muted" style="margin-top:4px">
+          物理安全包络 (CAP Envelope): <code>${esc(envSummary)}</code>
+        </div>
+        <pre class="code">${esc(JSON.stringify(d.telemetry, null, 2))}</pre>
+        <div class="row" style="margin-top:10px;gap:6px">
+          <button class="btn secondary" onclick="embodyHardware('${esc(d.device_id)}', false)">附身此硬件 (Embody)</button>
+          ${d.embodied_fay_id ? `<button class="btn secondary" onclick="embodyHardware('${esc(d.device_id)}', true)">解除附身</button>` : ''}
+          <button class="btn ok" onclick="actuateHardware('${esc(d.device_id)}', '${esc(preset.safeAction)}', '${safeJson}')">${esc(preset.safeLabel)}</button>
+          <button class="btn secondary" style="border-color:var(--danger);color:#fca5a5" onclick="actuateHardware('${esc(d.device_id)}', '${esc(preset.overAction)}', '${overJson}')">${esc(preset.overLabel)}</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function connectExternalHardware() {
+  const endpoint = document.getElementById('hw-connect-ep').value.trim();
+  const fb = document.getElementById('hw-feedback');
+  try {
+    const dev = await api('/api/v1/hardware/connect', 'POST', { endpoint });
+    fb.innerHTML = `<div class="ctx-approval" style="border-color:var(--ok)"><b>已接入外部 FHBP/1.0 固件节点</b>：<code>${esc(dev.device_id)}</code> (${esc(dev.display_name)}) @ <code>${esc(dev.bridge_endpoint || endpoint)}</code></div>`;
+    toast('已连接外部硬件节点: ' + dev.device_id);
+    await refreshAll();
+  } catch (e) {
+    fb.innerHTML = `<div class="ctx-alert"><b>外部硬件节点连接失败</b>：${esc(e.message)}</div>`;
+    toast(e.message);
+  }
+}
+
+async function embodyHardware(deviceId, detach) {
+  const fb = document.getElementById('hw-feedback');
+  const fay_id = detach ? null : document.getElementById('hw-fay-select').value;
+  if (!detach && !fay_id) return toast('请先在 Tab 3 创建分身实例');
+  try {
+    const dev = await api(`/api/v1/hardware/devices/${encodeURIComponent(deviceId)}/embody`, 'POST', { fay_id });
+    fb.innerHTML = `<div class="ctx-approval" style="border-color:var(--ok)"><b>硬件附身关系已更新</b>：<code>${esc(dev.device_id)}</code> → <code>${esc(dev.embodied_fay_id || '已解除附身')}</code></div>`;
+    toast(detach ? '已解除硬件附身' : ('已附身 ' + deviceId));
+    await refreshAll();
+  } catch (e) {
+    fb.innerHTML = `<div class="ctx-alert">${esc(e.message)}</div>`;
+    toast(e.message);
+  }
+}
+
+async function actuateHardware(deviceId, action, encodedParams) {
+  const fb = document.getElementById('hw-feedback');
+  const params = JSON.parse(decodeURIComponent(encodedParams));
+  try {
+    const res = await api(`/api/v1/hardware/devices/${encodeURIComponent(deviceId)}/actuate`, 'POST', { action, params });
+    if (res.status === 'pending_cap_approval') {
+      fb.innerHTML = `<div class="ctx-approval"><b>高危硬件工序已挂起等待 CAP 人类原型确认 (${esc(res.approval_id)})</b>：请在 Tab 4 或 <a href="/mobile" target="_blank" style="color:var(--accent)">📱 手机监护端 (/mobile)</a> 点击批准执行！</div>`;
+      toast('已转入 CAP 待审批: ' + res.approval_id);
+    } else {
+      fb.innerHTML = `<div class="ctx-approval" style="border-color:var(--ok)"><b>硬件驱动执行成功</b>：${esc(res.message)}</div>`;
+      toast('已执行硬件动作: ' + action);
+    }
+    await refreshAll();
+  } catch (e) {
+    fb.innerHTML = `<div class="ctx-alert"><b>CAP 物理安全包络 / Faying 门禁拦截</b>：${esc(e.message)}</div>`;
+    toast('已拦截: ' + e.message);
+    await refreshAll();
+  }
+}
+
+async function haltAllHardwareG0() {
+  const fb = document.getElementById('hw-feedback');
+  try {
+    const res = await api('/api/v1/hardware/g0_all', 'POST', {
+      freeze_all_fays: false,
+      reason: 'Human Prime clicked Hardware Hub G0 Emergency Stop'
+    });
+    fb.innerHTML = `<div class="ctx-alert"><b>G0 全硬件紧急安全停机已生效</b>：${res.halted_devices.length} 台硬件已强制切入物理安全态 (${esc(res.halted_devices.join(', '))})</div>`;
+    toast('全硬件已切入 G0 物理安全态');
+    await refreshAll();
+  } catch (e) {
     toast(e.message);
   }
 }

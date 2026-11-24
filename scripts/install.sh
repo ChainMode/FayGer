@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/ChainMode/FayGer/main/scripts/install.sh | sh
 set -eu
 
-VERSION="${FAYGER_VERSION:-v0.3.0}"
+VERSION="${FAYGER_VERSION:-v0.3.1}"
 INSTALL_DIR="${FAYGER_INSTALL_DIR:-${HOME}/.fayger/bin}"
 REPO="${FAYGER_GITHUB_REPO:-ChainMode/FayGer}"
 

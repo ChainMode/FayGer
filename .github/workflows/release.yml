@@ -1,6 +1,6 @@
-name: Release - fayger CLI
+name: Release - FayGer Multi-Platform Suite
 
-# 仅在打 v* tag 时触发，与日常 CI（ci-m0.yml）解耦。
+# Triggered exclusively on v* tags (e.g., v0.3.1), decoupled from daily CI (ci-m0.yml).
 on:
   push:
     tags:
@@ -13,6 +13,21 @@ env:
   WORKSPACE_DIR: release/dev/core
 
 jobs:
+  c99-hardware-sdk:
+    name: verify C99 FHBP/1.0 hardware SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile C99 firmware reference (-Wall -Wextra -Werror) & run self-test
+        run: |
+          set -euo pipefail
+          gcc -std=c99 -O2 -Wall -Wextra -Werror \
+            release/hardware-sdk/c99/example_firmware_node.c \
+            -o /tmp/fw
+          /tmp/fw --self-test
+          rm -f /tmp/fw
+
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -98,7 +113,51 @@ jobs:
             & ".\$out" version
           }
 
-      - name: Upload build artifacts
+      - name: Package macOS Apple Silicon .dmg (with optional Developer ID & Notarization)
+        if: matrix.target == 'aarch64-apple-darwin'
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH=""
+          cleanup_keychain() {
+            if [ -n "$KEYCHAIN_PATH" ] && [ -f "$KEYCHAIN_PATH" ]; then
+              security delete-keychain "$KEYCHAIN_PATH" || true
+            fi
+          }
+          trap cleanup_keychain EXIT
+
+          if [ -n "${APPLE_CERTIFICATE_P12_BASE64:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            KEYCHAIN_PATH="${RUNNER_TEMP}/fayger-signing.keychain-db"
+            KEYCHAIN_PWD="$(uuidgen)"
+            CERT_P12="${RUNNER_TEMP}/fayger-cert.p12"
+            printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_P12"
+            security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+            security import "$CERT_P12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+            rm -f "$CERT_P12"
+          fi
+
+          ./scripts/package-macos-dmg.sh \
+            "${WORKSPACE_DIR}/fayger-aarch64-apple-darwin" \
+            "${GITHUB_REF_NAME:-v0.3.1}" \
+            "${WORKSPACE_DIR}/FayGer-macos-arm64.dmg"
+
+          (
+            cd "${WORKSPACE_DIR}"
+            shasum -a 256 "FayGer-macos-arm64.dmg" > "FayGer-macos-arm64.dmg.sha256"
+          )
+
+      - name: Upload CLI binary artifacts
         uses: actions/upload-artifact@v4
         with:
           name: fayger-${{ matrix.target }}
@@ -106,9 +165,101 @@ jobs:
             ${{ env.WORKSPACE_DIR }}/fayger-${{ matrix.target }}${{ matrix.ext }}
             ${{ env.WORKSPACE_DIR }}/fayger-${{ matrix.target }}${{ matrix.ext }}.sha256
 
+      - name: Upload macOS arm64 DMG artifact
+        if: matrix.target == 'aarch64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fayger-macos-arm64-dmg
+          path: |
+            ${{ env.WORKSPACE_DIR }}/FayGer-macos-arm64.dmg
+            ${{ env.WORKSPACE_DIR }}/FayGer-macos-arm64.dmg.sha256
+
+  android-apk:
+    name: build android companion apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build & sign fayger-mobile-guardian-android.apk
+        working-directory: release/mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle assembleDebug --no-daemon
+
+          OUT_APK="fayger-mobile-guardian-android.apk"
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$DEBUG_APK"
+
+          BUILD_TOOLS_DIR="$(ls -1d "${ANDROID_HOME}/build-tools/"* | sort -V | tail -n 1)"
+          APKSIGNER="${BUILD_TOOLS_DIR}/apksigner"
+
+          if [ -x "$APKSIGNER" ]; then
+            KS_FILE="${RUNNER_TEMP}/fayger-release.p12"
+            if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ] && [ -n "${ANDROID_KEYSTORE_PASSWORD:-}" ]; then
+              printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KS_FILE"
+              KS_PASS="$ANDROID_KEYSTORE_PASSWORD"
+              KEY_ALIAS="${ANDROID_KEY_ALIAS:-fayger}"
+              KEY_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+            else
+              KS_PASS="fayger-guardian-release"
+              KEY_ALIAS="fayger"
+              KEY_PASS="$KS_PASS"
+              keytool -genkeypair \
+                -keystore "$KS_FILE" \
+                -storetype PKCS12 \
+                -storepass "$KS_PASS" \
+                -keypass "$KEY_PASS" \
+                -alias "$KEY_ALIAS" \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=FayGer Guardian, OU=iFay, O=ChainMode, L=Global, ST=Global, C=US"
+            fi
+            "$APKSIGNER" sign \
+              --ks "$KS_FILE" \
+              --ks-pass "pass:${KS_PASS}" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass "pass:${KEY_PASS}" \
+              --out "$OUT_APK" \
+              "$DEBUG_APK"
+            "$APKSIGNER" verify "$OUT_APK"
+            rm -f "$KS_FILE"
+          else
+            cp "$DEBUG_APK" "$OUT_APK"
+          fi
+
+          sha256sum "$OUT_APK" > "${OUT_APK}.sha256"
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fayger-mobile-guardian-android
+          path: |
+            release/mobile/android/fayger-mobile-guardian-android.apk
+            release/mobile/android/fayger-mobile-guardian-android.apk.sha256
+
   release:
     name: publish release
-    needs: build
+    needs:
+      - c99-hardware-sdk
+      - build
+      - android-apk
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -116,7 +267,7 @@ jobs:
         with:
           path: dist
 
-      - name: Attach binaries + checksums to the release
+      - name: Attach binaries, macOS DMG, Android APK & checksums to the release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*

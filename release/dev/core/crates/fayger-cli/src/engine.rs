@@ -21,6 +21,12 @@ use crate::device_profile::{
 };
 use crate::ego_package::{encode_hex, hex_sha256, jcs_canonicalize};
 use crate::error::CliError;
+use crate::hardware_hub::{
+    apply_local_twin_actuation, default_reference_hardware_devices, fhbp_fetch_remote_manifest,
+    fhbp_forward_actuate, fhbp_send_g0_halt, transition_device_to_g0_safe_state,
+    validate_physical_envelope, HardwareActuateReceipt, HardwareDeviceRecord,
+    HardwareG0HaltReceipt,
+};
 use crate::host_profile::detect_host_environment;
 use crate::icp_ego::{
     message_mentions_merit, render_ctx_terminal, run_ego_three_in_one, CtxAnnotation, CtxEnvelope,
@@ -263,6 +269,15 @@ pub enum RequestedHostAction {
         /// 快照场景标签。
         label: String,
     },
+    /// 驱动具身附身硬件终端执行高危工序（`hardware.actuate`，如五轴数控机床 `start_spindle` 经 `CAP` 人工确认）。
+    HardwareActuate {
+        /// 硬件终端唯一标识。
+        device_id: String,
+        /// 硬件动作名称。
+        action: String,
+        /// 动作参数序列化 JSON 字符串。
+        params_json: String,
+    },
 }
 
 impl RequestedHostAction {
@@ -275,6 +290,7 @@ impl RequestedHostAction {
             Self::OsClipboardRead | Self::OsClipboardWrite { .. } => "os.clipboard",
             Self::OsNotify { .. } => "os.notify",
             Self::HardwareTelemetry => "hardware.telemetry",
+            Self::HardwareActuate { .. } => "hardware.actuate",
             Self::HardwareSpeak { .. } => "hardware.audio",
             Self::HardwareScreenCapture { .. } => "hardware.screen",
             Self::AppControl { .. } => "app.control",
@@ -306,6 +322,7 @@ impl RequestedHostAction {
                     || path.starts_with("config/")
             }
             Self::HardwareScreenCapture { .. }
+            | Self::HardwareActuate { .. }
             | Self::AppControl { .. }
             | Self::ProcessExec { .. }
             | Self::CameraSnapshot { .. } => true,
@@ -326,6 +343,9 @@ impl RequestedHostAction {
             }
             Self::OsNotify { title, .. } => format!("os://notify/{title}"),
             Self::HardwareTelemetry => "hardware://telemetry/battery+system".to_owned(),
+            Self::HardwareActuate {
+                device_id, action, ..
+            } => format!("fhbp://{device_id}/{action}"),
             Self::HardwareSpeak { text } => {
                 format!("hardware://audio/speak ({} chars)", text.chars().count())
             }
@@ -436,6 +456,9 @@ pub struct DashboardSnapshot {
     /// 当前操作系统全部标准能力的原生工具与隐私权限就绪列表。
     #[serde(default)]
     pub os_permissions: Vec<OsPermissionItem>,
+    /// 具身硬件终端附身中枢全部设备列表（`FHBP/1.0`）。
+    #[serde(default)]
+    pub hardware_devices: Vec<HardwareDeviceRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -447,6 +470,8 @@ struct PersistedEngineData {
     fays: BTreeMap<String, StoredFayInstance>,
     cap_approvals: BTreeMap<String, CapApprovalItem>,
     tp_sessions: BTreeMap<String, TpSharedSession>,
+    #[serde(default = "default_reference_hardware_devices")]
+    hardware_devices: BTreeMap<String, HardwareDeviceRecord>,
     audit_entries: Vec<HashChainedAuditEntry>,
 }
 
@@ -459,6 +484,7 @@ impl Default for PersistedEngineData {
             fays: BTreeMap::new(),
             cap_approvals: BTreeMap::new(),
             tp_sessions: BTreeMap::new(),
+            hardware_devices: default_reference_hardware_devices(),
             audit_entries: Vec::new(),
         }
     }
@@ -506,6 +532,9 @@ impl FayGerEngine {
             host_pool,
             data,
         };
+        if engine.data.hardware_devices.is_empty() {
+            engine.data.hardware_devices = default_reference_hardware_devices();
+        }
         if engine.data.audit_entries.is_empty() {
             engine.append_audit(
                 "engine_genesis",
@@ -817,6 +846,9 @@ impl FayGerEngine {
             }
         }
 
+        let (halted_hw, remote_hw) =
+            self.cascade_hardware_g0_halt_inner(Some(&canonical_id), brake_reason)?;
+
         self.append_audit(
             "g0_emergency_brake",
             json!({
@@ -824,6 +856,8 @@ impl FayGerEngine {
                 "new_state": "ROGUE",
                 "revoked_mandate_id": revoked_mandate_id,
                 "revoked_pending_approvals": revoked_approvals,
+                "halted_hardware_devices": halted_hw,
+                "remote_bridges_notified": remote_hw,
                 "reason": brake_reason,
             }),
         )?;
@@ -1126,12 +1160,24 @@ impl FayGerEngine {
 
         let human_token = local_attestation_human_token(&self.state_dir)?;
         let ticket_id = format!("CAP-CONFIRMED-{approval_id}");
-        let (exec_summary, artifact_ann, output_sha256) = execute_sandboxed_action(
-            Path::new(&stored_fay.sandbox_dir),
-            &self.host_pool,
-            &item_snapshot.action,
-            &ticket_id,
-        )?;
+        let (exec_summary, artifact_ann, output_sha256) =
+            if let RequestedHostAction::HardwareActuate {
+                ref device_id,
+                ref action,
+                ref params_json,
+            } = item_snapshot.action
+            {
+                let params_val: Value =
+                    serde_json::from_str(params_json).unwrap_or_else(|_| json!({}));
+                self.execute_confirmed_hardware_actuation(device_id, &fay_id, action, &params_val)?
+            } else {
+                execute_sandboxed_action(
+                    Path::new(&stored_fay.sandbox_dir),
+                    &self.host_pool,
+                    &item_snapshot.action,
+                    &ticket_id,
+                )?
+            };
 
         if let Some(slot) = self.data.cap_approvals.get_mut(approval_id) {
             "approved".clone_into(&mut slot.status);
@@ -2027,6 +2073,7 @@ impl FayGerEngine {
             }
         };
         let os_permissions = self.get_os_permissions();
+        let hardware_devices = self.list_hardware_devices();
 
         Ok(DashboardSnapshot {
             fayger_version: crate::FAYGER_VERSION.to_owned(),
@@ -2041,7 +2088,436 @@ impl FayGerEngine {
             audit_entries: self.data.audit_entries.clone(),
             merit_config,
             os_permissions,
+            hardware_devices,
         })
+    }
+
+    /// 列出全部具身硬件终端（内置五大标杆终端 + 外部已接入 `FHBP/1.0` 节点）。
+    #[must_use]
+    pub fn list_hardware_devices(&self) -> Vec<HardwareDeviceRecord> {
+        self.data.hardware_devices.values().cloned().collect()
+    }
+
+    /// 重置五大标杆硬件终端至初始 `READY` 状态（保留外部桥接节点或供演示复位）。
+    pub fn reset_reference_hardware_devices(
+        &mut self,
+    ) -> Result<Vec<HardwareDeviceRecord>, CliError> {
+        for (id, fresh) in default_reference_hardware_devices() {
+            self.data.hardware_devices.insert(id, fresh);
+        }
+        self.append_audit(
+            "hardware.reference_reset",
+            json!({ "count": self.data.hardware_devices.len() }),
+        )?;
+        self.save()?;
+        Ok(self.list_hardware_devices())
+    }
+
+    /// 接入外部 `FHBP/1.0` C99 / 嵌入式固件 HTTP 桥接节点（`POST /api/v1/hardware/connect`）。
+    pub fn connect_external_hardware(
+        &mut self,
+        endpoint: &str,
+    ) -> Result<HardwareDeviceRecord, CliError> {
+        let fetched = fhbp_fetch_remote_manifest(endpoint, None)?;
+        let existing_fay = self
+            .data
+            .hardware_devices
+            .get(&fetched.device_id)
+            .and_then(|d| d.embodied_fay_id.clone());
+        let mut record = fetched;
+        if record.embodied_fay_id.is_none() {
+            record.embodied_fay_id = existing_fay;
+        }
+        let dev_id = record.device_id.clone();
+        self.data
+            .hardware_devices
+            .insert(dev_id.clone(), record.clone());
+        self.append_audit(
+            "hardware.bridge_connected",
+            json!({
+                "device_id": dev_id,
+                "category": record.category,
+                "integration_tier": record.integration_tier,
+                "bridge_endpoint": record.bridge_endpoint,
+                "safe_state_name": record.safe_state_name,
+            }),
+        )?;
+        self.save()?;
+        Ok(record)
+    }
+
+    /// 将指定 `iFay` / `coFay` 附身绑定到目标硬件终端，或传入 `None` 解除附身（`POST /api/v1/hardware/devices/<id>/embody`）。
+    pub fn embody_hardware_device(
+        &mut self,
+        device_id: &str,
+        fay_id_or_instance: Option<&str>,
+    ) -> Result<HardwareDeviceRecord, CliError> {
+        self.enforce_liveness()?;
+        let clean_dev = device_id.trim();
+        if !self.data.hardware_devices.contains_key(clean_dev) {
+            return Err(CliError::Usage(format!(
+                "hardware device '{clean_dev}' not found"
+            )));
+        }
+
+        let resolved_fay = match fay_id_or_instance.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(fid) => Some(self.resolve_fay_key(fid)?),
+            None => None,
+        };
+
+        let updated = {
+            let dev = self
+                .data
+                .hardware_devices
+                .get_mut(clean_dev)
+                .ok_or_else(|| {
+                    CliError::Usage(format!("hardware device '{clean_dev}' not found"))
+                })?;
+            if let Some(ref fid) = resolved_fay {
+                dev.embodied_fay_id = Some(fid.clone());
+                dev.last_action_summary = Some(format!("Embodied by {fid}"));
+            } else {
+                dev.embodied_fay_id = None;
+                if dev.current_state == "ACTUATING" {
+                    transition_device_to_g0_safe_state(dev, "Fay detached from hardware");
+                } else {
+                    "READY".clone_into(&mut dev.current_state);
+                }
+                dev.last_action_summary = Some("Detached embodiment".to_owned());
+            }
+            dev.updated_at_unix = unix_now_secs();
+            dev.clone()
+        };
+
+        self.append_audit(
+            "hardware.embodied",
+            json!({
+                "device_id": clean_dev,
+                "fay_id": resolved_fay,
+                "current_state": updated.current_state,
+            }),
+        )?;
+        self.save()?;
+        Ok(updated)
+    }
+
+    /// 向具身硬件终端派发动作（强制执行 `Faying` 守卫、`CAP` 物理安全包络校验与高危工序人工确认）。
+    #[allow(clippy::too_many_lines)]
+    pub fn actuate_hardware_device(
+        &mut self,
+        device_id: &str,
+        action: &str,
+        params: &Value,
+    ) -> Result<HardwareActuateReceipt, CliError> {
+        self.enforce_liveness()?;
+        let clean_dev = device_id.trim();
+        let clean_act = action.trim();
+        let dev_snapshot = self
+            .data
+            .hardware_devices
+            .get(clean_dev)
+            .cloned()
+            .ok_or_else(|| CliError::Usage(format!("hardware device '{clean_dev}' not found")))?;
+
+        // 1. 核验是否已由处于 FAYING 监护态的分身附身（否则严格返回 403 Forbidden）
+        let Some(ref fay_id) = dev_snapshot.embodied_fay_id else {
+            return Err(CliError::Failure(FaygerError::new(
+                ErrorCode::AdpCapabilityDenied,
+                Layer::Runtime,
+                format!(
+                    "hardware device '{clean_dev}' has no embodied Fay; attach an iFay/coFay first"
+                ),
+            )));
+        };
+        let stored_fay = self.get_fay(fay_id)?.clone();
+        if stored_fay.faying_state != FayingState::Faying {
+            return Err(CliError::Failure(FaygerError::new(
+                ErrorCode::AdpCapabilityDenied,
+                Layer::Runtime,
+                format!(
+                    "embodied Fay '{fay_id}' is in ROGUE state; Human Prime must activate Faying before actuating '{clean_dev}'"
+                ),
+            )));
+        }
+        let effective_caps = self.compute_effective_capabilities(&stored_fay);
+        if !effective_caps.iter().any(|c| c == "hardware.actuate") {
+            return Err(CliError::Failure(FaygerError::new(
+                ErrorCode::AdpCapabilityDenied,
+                Layer::Adapter,
+                format!(
+                    "capability 'hardware.actuate' is not granted in BuF ∩ HostPool ∩ Policy for '{fay_id}'"
+                ),
+            )));
+        }
+
+        // 2. CAP 物理安全包络检查（必须在生成任何 CAP 待批单之前确定性拦截越界物理量！）
+        if let Err(violation) = validate_physical_envelope(&dev_snapshot, clean_act, params) {
+            self.append_audit(
+                "hardware.envelope_blocked",
+                json!({
+                    "device_id": clean_dev,
+                    "fay_id": fay_id,
+                    "action": clean_act,
+                    "params": params,
+                    "violation": violation,
+                }),
+            )?;
+            self.save()?;
+            return Err(CliError::Usage(violation));
+        }
+
+        // 3. 若动作属于高危工序（如五轴机床 start_spindle），创建 CAP 待审批单等待 Human Prime 确认
+        if dev_snapshot
+            .requires_cap_approval_for
+            .iter()
+            .any(|a| a == clean_act)
+        {
+            let params_json = jcs_canonicalize(params).unwrap_or_else(|_| params.to_string());
+            let host_action = RequestedHostAction::HardwareActuate {
+                device_id: clean_dev.to_owned(),
+                action: clean_act.to_owned(),
+                params_json,
+            };
+            let action_val = serde_json::to_value(&host_action).unwrap_or_else(|_| json!({}));
+            let canonical_action = jcs_canonicalize(&action_val)?;
+            let params_sha256 = hex_sha256(canonical_action.as_bytes());
+            let approval_id = format!("apr_{}", &encode_hex(&fresh_entropy_32())[..12]);
+            let now = unix_now_secs();
+
+            let item = CapApprovalItem {
+                approval_id: approval_id.clone(),
+                fay_id: fay_id.clone(),
+                action: host_action.clone(),
+                required_capability: "hardware.actuate".to_owned(),
+                criticality: "high".to_owned(),
+                params_sha256: params_sha256.clone(),
+                status: "pending".to_owned(),
+                created_at_unix: now,
+                decided_at_unix: None,
+                execution_summary: None,
+            };
+            self.data.cap_approvals.insert(approval_id.clone(), item);
+
+            let hold_msg = format!(
+                "High-risk hardware actuation '{clean_act}' on '{clean_dev}' passed Physical Safety Envelope and is held for Human Prime CAP confirmation ({approval_id})."
+            );
+            let env = CtxEnvelope {
+                schema_version: ICP_CTX_SCHEMA_VERSION.to_owned(),
+                message_id: format!("ctx_hw_{}", &approval_id[4..]),
+                timestamp_unix: now,
+                fay_id: fay_id.clone(),
+                fay_kind: stored_fay.metadata.kind.as_str().to_owned(),
+                faying_state: "FAYING".to_owned(),
+                summary_text: hold_msg.clone(),
+                ego_trace: crate::icp_ego::EgoPipelineTrace {
+                    mode: "fhbp_cap_gate".to_owned(),
+                    intuition_intent: "hardware_high_risk_hold".to_owned(),
+                    intuition_confidence: 1.0,
+                    dynamic_context_summary: format!("FHBP/1.0 {clean_dev} {clean_act}"),
+                    guard_rewrite_applied: false,
+                },
+                annotations: vec![CtxAnnotation::CapApprovalCard {
+                    approval_id: approval_id.clone(),
+                    fay_id: fay_id.clone(),
+                    operation: "hardware.actuate".to_owned(),
+                    target: host_action.target_summary(),
+                    criticality: "high".to_owned(),
+                    reason: format!(
+                        "Physical Safety Envelope OK; Human Prime confirmation required for '{clean_act}' on {}",
+                        dev_snapshot.display_name
+                    ),
+                    status: "pending".to_owned(),
+                }],
+            };
+            let term = render_ctx_terminal(&env);
+            if let Ok(fay_mut) = self.get_fay_mut(fay_id) {
+                fay_mut.chat_history.push(ChatTurnRecord {
+                    user_input: format!("[FHBP Hardware Request: {clean_dev}/{clean_act}]"),
+                    response_ctx: env,
+                    terminal_text: term,
+                });
+            }
+
+            self.append_audit(
+                "cap_hold_for_human_confirmation",
+                json!({
+                    "approval_id": approval_id,
+                    "fay_id": fay_id,
+                    "operation": "hardware.actuate",
+                    "device_id": clean_dev,
+                    "action": clean_act,
+                    "params_sha256": params_sha256,
+                }),
+            )?;
+            self.save()?;
+            return Ok(HardwareActuateReceipt {
+                status: "pending_cap_approval".to_owned(),
+                approval_id: Some(approval_id),
+                message: hold_msg,
+                device: dev_snapshot,
+            });
+        }
+
+        // 4. 常规包络内动作：立即转发至外部 C99 节点或更新内置数字孪生，并记入审计链
+        let (msg, _, _) =
+            self.execute_confirmed_hardware_actuation(clean_dev, fay_id, clean_act, params)?;
+        self.save()?;
+        let latest = self.data.hardware_devices[clean_dev].clone();
+        Ok(HardwareActuateReceipt {
+            status: "actuated".to_owned(),
+            approval_id: None,
+            message: msg,
+            device: latest,
+        })
+    }
+
+    /// 一键触发全局硬件 `G0` 紧急安全停机（可选同步冻结全部活跃 `Fay` 退回 `ROGUE`）。
+    pub fn trigger_hardware_g0_all(
+        &mut self,
+        freeze_all_fays: bool,
+        reason: Option<&str>,
+    ) -> Result<HardwareG0HaltReceipt, CliError> {
+        let halt_reason = reason
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Human Prime triggered Global Hardware G0 Safe Halt");
+        let now = unix_now_secs();
+        let mut frozen_fays = Vec::new();
+
+        if freeze_all_fays {
+            for (fid, stored) in &mut self.data.fays {
+                if stored.faying_state == FayingState::Faying {
+                    stored.faying_state = FayingState::Rogue;
+                    stored.active_mandate = None;
+                    stored.last_rogue_reason = Some(halt_reason.to_owned());
+                    frozen_fays.push(fid.clone());
+                }
+            }
+            for apr in self.data.cap_approvals.values_mut() {
+                if apr.status == "pending" {
+                    "revoked_g0".clone_into(&mut apr.status);
+                    apr.decided_at_unix = Some(now);
+                }
+            }
+        }
+
+        let (halted_devices, remote_bridges_notified) =
+            self.cascade_hardware_g0_halt_inner(None, halt_reason)?;
+        self.save()?;
+        Ok(HardwareG0HaltReceipt {
+            halted_devices,
+            remote_bridges_notified,
+            frozen_fays,
+            reason: halt_reason.to_owned(),
+        })
+    }
+
+    fn execute_confirmed_hardware_actuation(
+        &mut self,
+        device_id: &str,
+        fay_id: &str,
+        action: &str,
+        params: &Value,
+    ) -> Result<(String, CtxAnnotation, String), CliError> {
+        let dev_snapshot = self
+            .data
+            .hardware_devices
+            .get(device_id)
+            .cloned()
+            .ok_or_else(|| CliError::Usage(format!("hardware device '{device_id}' not found")))?;
+        if dev_snapshot.embodied_fay_id.as_deref() != Some(fay_id) {
+            return Err(CliError::Failure(FaygerError::new(
+                ErrorCode::AdpCapabilityDenied,
+                Layer::Runtime,
+                format!("hardware device '{device_id}' is no longer embodied by '{fay_id}'"),
+            )));
+        }
+        if let Err(violation) = validate_physical_envelope(&dev_snapshot, action, params) {
+            return Err(CliError::Usage(violation));
+        }
+
+        let (summary, updated_record) = {
+            let dev_mut = self
+                .data
+                .hardware_devices
+                .get_mut(device_id)
+                .ok_or_else(|| {
+                    CliError::Usage(format!("hardware device '{device_id}' not found"))
+                })?;
+            let msg = if let Some(ep) = dev_mut.bridge_endpoint.clone() {
+                fhbp_forward_actuate(&ep, dev_mut, fay_id, action, params)?
+            } else {
+                apply_local_twin_actuation(dev_mut, action, params)
+            };
+            (msg, dev_mut.clone())
+        };
+
+        let pretty = serde_json::to_string_pretty(&updated_record.telemetry)
+            .unwrap_or_else(|_| "{}".to_owned());
+        let sha = hex_sha256(pretty.as_bytes());
+
+        self.append_audit(
+            "hardware.actuated",
+            json!({
+                "device_id": device_id,
+                "fay_id": fay_id,
+                "action": action,
+                "params": params,
+                "current_state": updated_record.current_state,
+                "bridge_endpoint": updated_record.bridge_endpoint,
+                "telemetry_sha256": sha,
+            }),
+        )?;
+
+        Ok((
+            summary,
+            CtxAnnotation::ArtifactPreview {
+                title: format!("FHBP/1.0 Hardware Actuated ({device_id} · {action})"),
+                path: format!("fhbp://{device_id}/telemetry.json"),
+                content_preview: pretty,
+                sha256: sha.clone(),
+            },
+            sha,
+        ))
+    }
+
+    fn cascade_hardware_g0_halt_inner(
+        &mut self,
+        target_fay_id: Option<&str>,
+        reason: &str,
+    ) -> Result<(Vec<String>, Vec<String>), CliError> {
+        let mut halted = Vec::new();
+        let mut remote_notified = Vec::new();
+
+        for dev in self.data.hardware_devices.values_mut() {
+            let matches_target = match target_fay_id {
+                Some(fid) => dev.embodied_fay_id.as_deref() == Some(fid),
+                None => true,
+            };
+            if matches_target {
+                transition_device_to_g0_safe_state(dev, reason);
+                halted.push(dev.device_id.clone());
+                if let Some(ref ep) = dev.bridge_endpoint {
+                    if fhbp_send_g0_halt(ep, &dev.device_id, reason) {
+                        remote_notified.push(dev.device_id.clone());
+                    }
+                }
+            }
+        }
+
+        if !halted.is_empty() {
+            self.append_audit(
+                "hardware.g0_safe_halt",
+                json!({
+                    "fay_id": target_fay_id,
+                    "halted_devices": halted,
+                    "remote_bridges_notified": remote_notified,
+                    "reason": reason,
+                }),
+            )?;
+        }
+
+        Ok((halted, remote_notified))
     }
 
     /// 检查所有处于 `FAYING` 态的实例是否委托过期或心跳超时；超时者立即自动打回 `ROGUE`！
@@ -2073,6 +2549,10 @@ impl FayGerEngine {
                         apr.decided_at_unix = Some(now);
                     }
                 }
+                let _ = self.cascade_hardware_g0_halt_inner(
+                    Some(fid),
+                    "Faying heartbeat timeout -> hardware auto-halted",
+                )?;
                 self.append_audit(
                     "faying_heartbeat_timeout_rogue",
                     json!({
@@ -2660,7 +3140,8 @@ fn execute_sandboxed_action(
         }
         RequestedHostAction::FsRead { .. }
         | RequestedHostAction::FsWrite { .. }
-        | RequestedHostAction::CameraSnapshot { .. } => {}
+        | RequestedHostAction::CameraSnapshot { .. }
+        | RequestedHostAction::HardwareActuate { .. } => {}
     }
 
     let host_env = detect_host_environment();

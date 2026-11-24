@@ -222,6 +222,17 @@ fn probe_single_capability(cap: &str, in_host_pool: bool) -> OsPermissionItem {
                 detail: "Live battery, AC state, CPU, memory & storage telemetry".to_owned(),
             }
         }
+        "hardware.actuate" => OsPermissionItem {
+            capability: cap.to_owned(),
+            risk_tier: "normal".to_owned(),
+            status: "ready".to_owned(),
+            in_host_pool,
+            os_mechanism: "FHBP/1.0 Hardware Embodiment & Physical Safety Envelope".to_owned(),
+            settings_uri: None,
+            detail:
+                "Embodied Drone, RC Car, Robot Arm, 5-Axis CNC, Cinema Jib & C99 FHBP/1.0 nodes"
+                    .to_owned(),
+        },
         "hardware.audio" => {
             let (status, mech) = if os == "macos" {
                 (

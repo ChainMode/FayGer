@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>FayGer Pocket Guardian v0.3.1</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #111827;
+      --border: #1f2937;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --ok: #10b981;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px 16px 40px;
+      line-height: 1.45;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .brand { font-size: 18px; font-weight: 700; letter-spacing: 0.2px; }
+    .badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.14);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .g0-btn {
+      width: 100%;
+      padding: 15px 16px;
+      border-radius: 14px;
+      border: 2px solid #f87171;
+      background: linear-gradient(135deg, #dc2626, #991b1b);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+      box-shadow: 0 6px 22px rgba(239, 68, 68, 0.35);
+      margin-bottom: 14px;
+    }
+    .g0-btn:active { transform: scale(0.99); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .card h2 {
+      font-size: 14px;
+      color: var(--accent);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    input[type="url"] {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #374151;
+      background: #0b1120;
+      color: var(--text);
+      font-size: 13px;
+    }
+    button.btn {
+      padding: 9px 13px;
+      border-radius: 10px;
+      border: 1px solid #374151;
+      background: #1e293b;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.btn-primary {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+    }
+    button.btn-ok {
+      background: rgba(16, 185, 129, 0.18);
+      border-color: var(--ok);
+      color: #6ee7b7;
+    }
+    .kv {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .kv:last-child { border-bottom: none; }
+    .pill-ok { color: var(--ok); font-weight: 700; }
+    .pill-warn { color: var(--warn); font-weight: 700; }
+    .pill-danger { color: var(--danger); font-weight: 700; }
+    .toast {
+      font-size: 12px;
+      padding: 9px 12px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      background: rgba(16, 185, 129, 0.14);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="brand">FayGer Pocket Guardian</div>
+      <div class="muted">Human Prime Supervisory Companion · v0.3.1</div>
+    </div>
+    <span class="badge" id="modeBadge">Offline Preview</span>
+  </header>
+
+  <div class="toast" id="statusToast"></div>
+
+  <button class="g0-btn" onclick="triggerG0Brake()">
+    RED G0 EMERGENCY BRAKE · HALT ALL HOSTS
+  </button>
+
+  <section class="card">
+    <h2>
+      <span>1. Pair LAN FayGer Host</span>
+      <span class="muted">HTTP / QR URL</span>
+    </h2>
+    <p class="muted">
+      Connect to your desktop or embedded Linux <strong>Host</strong> running
+      <code>fayger up --bind 0.0.0.0:7979</code> on the same Wi-Fi/LAN.
+    </p>
+    <div class="row">
+      <input id="hostUrlInput" type="url" placeholder="http://192.168.1.42:7979/mobile" />
+      <button class="btn btn-primary" onclick="connectHost()">Connect</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>
+      <span>2. Faying Supervision Switch</span>
+      <span id="fayingState" class="pill-ok">FAYING ACTIVE</span>
+    </h2>
+    <div class="kv">
+      <span>Mounted Avatar</span>
+      <strong>alice.buf (iFay)</strong>
+    </div>
+    <div class="kv">
+      <span>Capability Intersection</span>
+      <code>BuF ∩ HostPool ∩ PerFayPolicy</code>
+    </div>
+    <div class="row">
+      <button class="btn btn-ok" onclick="toggleFaying(true)">Engage Faying</button>
+      <button class="btn" onclick="toggleFaying(false)">Suspend to Standby</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>
+      <span>3. FayID Vault &amp; GMChain Standing</span>
+      <span class="muted">Ed25519 Verified</span>
+    </h2>
+    <div class="kv">
+      <span>FayID Anchor</span>
+      <code>did:ifay:prime-7f3a...9c12</code>
+    </div>
+    <div class="kv">
+      <span>GMChain Standing</span>
+      <span class="pill-ok">Synced · Epoch #418</span>
+    </div>
+    <div class="kv">
+      <span>MeriToken Priority Balance</span>
+      <strong>1,280.0 μ</strong>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>
+      <span>4. CAP Remote Approval Queue</span>
+      <span id="capCount" class="pill-warn">1 Pending</span>
+    </h2>
+    <div id="capCardBody">
+      <p class="muted" style="margin-bottom:8px;">
+        <strong>CAP-REQ-094</strong>: <code>alice.buf</code> requests camera jib pan
+        (<code>pan_deg: +30</code>, <code>tilt_deg: +12</code>) on Host <code>fhbp-jib-01</code>.
+      </p>
+      <div class="row">
+        <button class="btn btn-ok" onclick="resolveCap('APPROVED')">Approve Once</button>
+        <button class="btn" onclick="resolveCap('DENIED')">Deny</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>
+      <span>5. Hardware Embodiment (FHBP/1.0)</span>
+      <span id="hwState" class="pill-ok">ENVELOPE ARMED</span>
+    </h2>
+    <div class="kv">
+      <span>Ackermann RC Car (<code>fhbp-rccar-01</code>)</span>
+      <span id="rcState">NEUTRAL_BRAKE</span>
+    </div>
+    <div class="kv">
+      <span>Cinema Camera Jib (<code>fhbp-jib-01</code>)</span>
+      <span id="jibState">PAN_TILT_LOCKED</span>
+    </div>
+    <div class="kv">
+      <span>Quadrotor UAV (<code>fhbp-drone-01</code>)</span>
+      <span id="droneState">HOVER_HOLD_OR_DISARM</span>
+    </div>
+    <div class="kv">
+      <span>3-Axis CNC Mill (<code>fhbp-cnc-01</code>)</span>
+      <span id="cncState">SPINDLE_OFF_FEED_HOLD</span>
+    </div>
+  </section>
+
+  <script>
+    (function init() {
+      var saved = "";
+      try {
+        if (window.FayGerNativeBridge && window.FayGerNativeBridge.getSavedHostUrl) {
+          saved = window.FayGerNativeBridge.getSavedHostUrl() || "";
+        } else {
+          saved = localStorage.getItem("fayger_host_url") || "";
+        }
+      } catch (_) {}
+      if (saved) {
+        document.getElementById("hostUrlInput").value = saved;
+      }
+    })();
+
+    function showToast(msg, isDanger) {
+      var el = document.getElementById("statusToast");
+      el.style.display = "block";
+      el.style.background = isDanger ? "rgba(239,68,68,0.18)" : "rgba(16,185,129,0.14)";
+      el.style.borderColor = isDanger ? "#ef4444" : "#10b981";
+      el.textContent = msg;
+    }
+
+    function connectHost() {
+      var raw = (document.getElementById("hostUrlInput").value || "").trim();
+      if (!raw) {
+        showToast("Enter a valid FayGer Host URL, e.g. http://192.168.1.42:7979/mobile", true);
+        return;
+      }
+      if (!/^https?:\/\//i.test(raw)) {
+        raw = "http://" + raw;
+      }
+      try {
+        if (window.FayGerNativeBridge && window.FayGerNativeBridge.saveHostUrl) {
+          window.FayGerNativeBridge.saveHostUrl(raw);
+        } else {
+          localStorage.setItem("fayger_host_url", raw);
+        }
+      } catch (_) {}
+      showToast("Connecting to FayGer Host " + raw + " ...", false);
+      window.location.href = raw;
+    }
+
+    function toggleFaying(active) {
+      var badge = document.getElementById("fayingState");
+      if (active) {
+        badge.textContent = "FAYING ACTIVE";
+        badge.className = "pill-ok";
+        showToast("Explicit Faying supervision mandate engaged by Human Prime.", false);
+      } else {
+        badge.textContent = "STANDBY (SUSPENDED)";
+        badge.className = "pill-warn";
+        showToast("Faying mandate suspended; Host capabilities locked.", false);
+      }
+    }
+
+    function resolveCap(decision) {
+      document.getElementById("capCount").textContent = "0 Pending";
+      document.getElementById("capCount").className = "pill-ok";
+      document.getElementById("capCardBody").innerHTML =
+        '<p class="muted">CAP-REQ-094 resolved: <strong>' + decision + '</strong> by Human Prime.</p>';
+      showToast("CAP request " + decision + ".", decision === "DENIED");
+    }
+
+    function triggerG0Brake() {
+      var faying = document.getElementById("fayingState");
+      faying.textContent = "G0 EMERGENCY HALTED";
+      faying.className = "pill-danger";
+      var hw = document.getElementById("hwState");
+      hw.textContent = "SAFE_HALT_APPLIED";
+      hw.className = "pill-danger";
+      showToast("G0 Emergency Brake engaged! Rogue Fay isolated & all FHBP/1.0 actuators zeroed.", true);
+    }
+  </script>
+</body>
+</html>

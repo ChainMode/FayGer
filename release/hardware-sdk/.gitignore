@@ -1,0 +1,6 @@
+# Ignore local test binaries and build artifacts
+*.o
+*.out
+*.exe
+*.dSYM/
+example_firmware_node

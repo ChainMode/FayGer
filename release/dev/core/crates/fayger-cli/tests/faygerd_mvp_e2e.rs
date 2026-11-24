@@ -126,6 +126,8 @@ fn faygerd_full_mvp_closed_loop_over_ephemeral_tcp() {
     assert!(html.contains("ICP 富交互对话与 CAP 审批"));
     assert!(html.contains("双 Fay 心灵感应协作间"));
     assert!(html.contains("6. 美誉值与优先权 (MeriToken)"));
+    assert!(html.contains("7. 硬件终端附身舱 (Hardware)"));
+    assert!(html.contains("📱 手机监护端 (/mobile)"));
     assert!(html.contains("OS 原生权限探针与一键申请面板"));
     assert!(html.contains("配置大脑：Ego 与外部大模型"));
     assert!(html.contains("终端硬件 / 操作系统 / 桌面软件操控台"));
@@ -135,6 +137,16 @@ fn faygerd_full_mvp_closed_loop_over_ephemeral_tcp() {
     assert!(!html.contains("https://cdn."));
 
     // 2. Device Runtime Environment Profile (`fayger-device-profile/1.0`)
+    // Point ego_endpoint at a guaranteed closed loopback port so offline fallback is deterministic even if :7980 is active on host.
+    let closed_ego = TcpListener::bind("127.0.0.1:0").expect("bind closed ego port");
+    let closed_ego_addr = closed_ego.local_addr().expect("closed ego addr");
+    drop(closed_ego);
+    let _ = http_json(
+        addr,
+        "PUT",
+        "/api/v1/host/pool",
+        Some(&json!({"ego_endpoint": format!("http://{closed_ego_addr}")})),
+    );
     let (prof_code, prof) = http_json(addr, "GET", "/api/v1/host/profile", None);
     assert_eq!(prof_code, 200);
     assert_eq!(prof["schema_version"], DEVICE_PROFILE_SCHEMA_VERSION);
@@ -1268,8 +1280,11 @@ fn faygerd_v0_3_0_os_permissions_brain_external_llm_ego_and_real_host_drivers_e2
     let (perm_code, perms) = http_json(addr, "GET", "/api/v1/os/permissions", None);
     assert_eq!(perm_code, 200);
     let perm_arr = perms.as_array().unwrap();
-    assert_eq!(perm_arr.len(), 12);
+    assert_eq!(perm_arr.len(), 13);
     assert!(perm_arr.iter().any(|p| p["capability"] == "os.clipboard"));
+    assert!(perm_arr
+        .iter()
+        .any(|p| p["capability"] == "hardware.actuate"));
     assert!(perm_arr
         .iter()
         .any(|p| p["capability"] == "hardware.screen"));
@@ -1536,5 +1551,400 @@ fn faygerd_v0_3_0_os_permissions_brain_external_llm_ego_and_real_host_drivers_e2
     stop_llm.store(true, Ordering::SeqCst);
     let _ = TcpStream::connect(llm_addr);
     let _ = llm_thread.join();
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn faygerd_v0_3_1_mobile_pwa_and_hardware_embodiment_envelope_cap_g0_cascade_e2e() {
+    let state_dir = fresh_state_dir("v031-hw-mobile");
+    let mut daemon = spawn_daemon("127.0.0.1:0", &state_dir).expect("spawn faygerd");
+    let addr = daemon.local_addr();
+
+    // 1. Mobile Companion Guardian PWA (`GET /mobile` & `GET /manifest.webmanifest`)
+    let (mob_code, mob_html) = http_call(addr, "GET", "/mobile", None);
+    assert_eq!(mob_code, 200);
+    assert!(mob_html.contains("fayger v0.3.1 · Mobile Guardian"));
+    assert!(mob_html.contains("G0 一键全端急刹"));
+    assert!(!mob_html.contains("https://cdn."));
+
+    let (man_code, man_val) = http_json(addr, "GET", "/manifest.webmanifest", None);
+    assert_eq!(man_code, 200);
+    assert_eq!(man_val["start_url"], "/mobile");
+    assert_eq!(man_val["display"], "standalone");
+
+    // 2. Hardware Hub pre-seeds all 5 Reference Hardware Terminals
+    let (hw_code, hw_list) = http_json(addr, "GET", "/api/v1/hardware/devices", None);
+    assert_eq!(hw_code, 200);
+    let hw_arr = hw_list.as_array().unwrap();
+    assert_eq!(hw_arr.len(), 5);
+    for expected_id in [
+        "drone_px4_01",
+        "rccar_ackermann_01",
+        "robot_arm_6dof_01",
+        "cnc_mill_5axis_01",
+        "camera_jib_pro_01",
+    ] {
+        assert!(hw_arr.iter().any(|d| d["device_id"] == expected_id));
+    }
+
+    // Unembodied actuation is strictly rejected with 403
+    let (unembodied_code, _) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/drone_px4_01/actuate",
+        Some(&json!({"action": "takeoff", "params": {"altitude_m": 25}})),
+    );
+    assert_eq!(unembodied_code, 403);
+
+    // 3. Create iFay (starts in ROGUE) and embody Drone, RC Car, and 5-Axis CNC Mill
+    let (_, ifay) = http_json(
+        addr,
+        "POST",
+        "/api/v1/fays/create",
+        Some(&json!({"kind": "ifay", "name": "EmbodiedPilotSoul"})),
+    );
+    let fay_id = ifay["fay_id"].as_str().unwrap().to_owned();
+
+    for dev_id in ["drone_px4_01", "rccar_ackermann_01", "cnc_mill_5axis_01"] {
+        let (emb_code, emb_dev) = http_json(
+            addr,
+            "POST",
+            &format!("/api/v1/hardware/devices/{dev_id}/embody"),
+            Some(&json!({"fay_id": fay_id})),
+        );
+        assert_eq!(emb_code, 200);
+        assert_eq!(emb_dev["embodied_fay_id"], fay_id);
+    }
+
+    // ROGUE state strictly blocks hardware actuation with 403!
+    let (rogue_hw_code, _) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/drone_px4_01/actuate",
+        Some(&json!({"action": "takeoff", "params": {"altitude_m": 30}})),
+    );
+    assert_eq!(rogue_hw_code, 403);
+
+    // 4. Switch Faying ON -> within-envelope actuations succeed
+    let (fay_on_code, _) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/faying"),
+        Some(&json!({"grade": "G2"})),
+    );
+    assert_eq!(fay_on_code, 200);
+
+    let (drone_ok_code, drone_ok) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/drone_px4_01/actuate",
+        Some(&json!({"action": "takeoff", "params": {"altitude_m": 35, "speed_mps": 6}})),
+    );
+    assert_eq!(drone_ok_code, 200);
+    assert_eq!(drone_ok["status"], "actuated");
+    assert_eq!(drone_ok["device"]["current_state"], "ACTUATING");
+    assert_eq!(drone_ok["device"]["telemetry"]["altitude_m"], 35);
+
+    let (car_ok_code, car_ok) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/rccar_ackermann_01/actuate",
+        Some(
+            &json!({"action": "drive_control", "params": {"steering_deg": 15, "throttle_pct": 40}}),
+        ),
+    );
+    assert_eq!(car_ok_code, 200);
+    assert_eq!(car_ok["device"]["current_state"], "ACTUATING");
+
+    // 5. Out-of-envelope commands MUST deterministically fail with 400 PHYSICAL_ENVELOPE_EXCEEDED
+    // BEFORE even creating any CAP approval item!
+    let (drone_over_code, drone_over_err) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/drone_px4_01/actuate",
+        Some(&json!({"action": "takeoff", "params": {"altitude_m": 300}})),
+    );
+    assert_eq!(drone_over_code, 400);
+    assert_eq!(drone_over_err["code"], "PHYSICAL_ENVELOPE_EXCEEDED");
+
+    let (cnc_over_code, cnc_over_err) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/cnc_mill_5axis_01/actuate",
+        Some(&json!({"action": "start_spindle", "params": {"spindle_rpm": 25000}})),
+    );
+    assert_eq!(cnc_over_code, 400);
+    assert_eq!(cnc_over_err["code"], "PHYSICAL_ENVELOPE_EXCEEDED");
+
+    let (_, aprs_after_over) = http_json(addr, "GET", "/api/v1/cap/approvals", None);
+    assert_eq!(aprs_after_over.as_array().unwrap().len(), 0);
+
+    // 6. Within-envelope CNC `start_spindle` (8000 RPM) holds for Human Prime CAP approval -> executes on Allow
+    let (cnc_hold_code, cnc_hold) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/cnc_mill_5axis_01/actuate",
+        Some(
+            &json!({"action": "start_spindle", "params": {"spindle_rpm": 8000, "feed_mm_min": 1200}}),
+        ),
+    );
+    assert_eq!(cnc_hold_code, 200);
+    assert_eq!(cnc_hold["status"], "pending_cap_approval");
+    let cnc_apr_id = cnc_hold["approval_id"].as_str().unwrap().to_owned();
+
+    let (dec_code, dec_res) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/cap/approvals/{cnc_apr_id}/decide"),
+        Some(&json!({"approve": true})),
+    );
+    assert_eq!(dec_code, 200);
+    assert_eq!(dec_res["status"], "approved");
+
+    let (_, hw_after_cnc) = http_json(addr, "GET", "/api/v1/hardware/devices", None);
+    let cnc_after = hw_after_cnc
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["device_id"] == "cnc_mill_5axis_01")
+        .unwrap();
+    assert_eq!(cnc_after["current_state"], "ACTUATING");
+    assert_eq!(cnc_after["telemetry"]["spindle_rpm"], 8000);
+
+    // 7. Triggering G0 Emergency Brake (`POST /api/v1/fays/<id>/faying/g0`) freezes Fay to ROGUE
+    // AND cascades all embodied hardware into their respective physical safe states!
+    let (g0_code, g0_view) = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/faying/g0"),
+        Some(&json!({"reason": "Mobile Guardian Red G0 Emergency Brake"})),
+    );
+    assert_eq!(g0_code, 200);
+    assert_eq!(g0_view["faying_state"], "ROGUE");
+
+    let (_, hw_after_g0) = http_json(addr, "GET", "/api/v1/hardware/devices", None);
+    let hw_map = hw_after_g0.as_array().unwrap();
+    let drone_g0 = hw_map
+        .iter()
+        .find(|d| d["device_id"] == "drone_px4_01")
+        .unwrap();
+    let car_g0 = hw_map
+        .iter()
+        .find(|d| d["device_id"] == "rccar_ackermann_01")
+        .unwrap();
+    let cnc_g0 = hw_map
+        .iter()
+        .find(|d| d["device_id"] == "cnc_mill_5axis_01")
+        .unwrap();
+    assert_eq!(drone_g0["current_state"], "LOITER_HOVER_RTL");
+    assert_eq!(drone_g0["telemetry"]["speed_mps"], 0.0);
+    assert_eq!(car_g0["current_state"], "NEUTRAL_FULL_BRAKE");
+    assert_eq!(car_g0["telemetry"]["throttle_pct"], 0.0);
+    assert_eq!(cnc_g0["current_state"], "E_STOP_SPINDLE_OFF");
+    assert_eq!(cnc_g0["telemetry"]["spindle_rpm"], 0.0);
+
+    let (_, audit_res) = http_json(addr, "GET", "/api/v1/audit", None);
+    assert_eq!(audit_res["verified"], true);
+    let audit_entries: Vec<HashChainedAuditEntry> =
+        serde_json::from_value(audit_res["entries"].clone()).expect("parse audit");
+    assert!(verify_audit_chain(&audit_entries));
+    assert!(audit_entries.iter().any(|e| e.stage == "hardware.embodied"));
+    assert!(audit_entries
+        .iter()
+        .any(|e| e.stage == "hardware.envelope_blocked"));
+    assert!(audit_entries.iter().any(|e| e.stage == "hardware.actuated"));
+    assert!(audit_entries
+        .iter()
+        .any(|e| e.stage == "hardware.g0_safe_halt"));
+
+    daemon.shutdown();
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn faygerd_v0_3_1_external_c99_fhbp_hardware_bridge_connect_actuate_and_g0_halt_e2e() {
+    use std::sync::Mutex;
+
+    let bridge_listener = TcpListener::bind("127.0.0.1:0").expect("bind mock c99 fhbp bridge");
+    let bridge_addr = bridge_listener.local_addr().expect("bridge addr");
+    let stop_bridge = Arc::new(AtomicBool::new(false));
+    let stop_bridge_clone = Arc::clone(&stop_bridge);
+    let seen_paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_paths_clone = Arc::clone(&seen_paths);
+
+    let bridge_thread = thread::spawn(move || {
+        for incoming in bridge_listener.incoming() {
+            if stop_bridge_clone.load(Ordering::SeqCst) {
+                break;
+            }
+            let Ok(mut stream) = incoming else {
+                continue;
+            };
+            let mut reader = BufReader::new(&stream);
+            let mut req_line = String::new();
+            if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut parts = req_line.split_whitespace();
+            let method = parts.next().unwrap_or("");
+            let path = parts.next().unwrap_or("");
+            seen_paths_clone
+                .lock()
+                .unwrap()
+                .push(format!("{method} {path}"));
+
+            let mut content_len = 0usize;
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" || h == "\n" {
+                    break;
+                }
+                if let Some((k, v)) = h.split_once(':') {
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        content_len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
+            let mut body = vec![0u8; content_len];
+            if content_len > 0 {
+                let _ = reader.read_exact(&mut body);
+            }
+            let req_val: Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
+
+            let resp_json = match (method, path) {
+                ("GET", "/fhbp/v1/manifest") => json!({
+                    "protocol": "fhbp/1.0",
+                    "device_id": "c99_turret_mcu_01",
+                    "display_name": "C99 MCU Pan-Tilt Turret",
+                    "category": "custom_hardware",
+                    "integration_tier": "tier_b_c99_bridge",
+                    "safe_state_name": "MCU_PWM_LOCKED",
+                    "current_state": "READY",
+                    "supported_actions": ["set_yaw"],
+                    "envelope": {
+                        "yaw_deg": {"min": -90.0, "max": 90.0, "unit": "deg"}
+                    },
+                    "telemetry": {
+                        "yaw_deg": 0.0,
+                        "mcu_temp_c": 36.5
+                    }
+                }),
+                ("POST", "/fhbp/v1/actuate") => json!({
+                    "ok": true,
+                    "current_state": "ACTUATING",
+                    "message": "C99 firmware applied PWM yaw",
+                    "telemetry": {
+                        "yaw_deg": req_val["params"]["yaw_deg"],
+                        "mcu_temp_c": 37.2
+                    }
+                }),
+                ("POST", "/fhbp/v1/g0_halt") => json!({
+                    "ok": true,
+                    "current_state": "MCU_PWM_LOCKED"
+                }),
+                _ => json!({"error": "unknown fhbp route"}),
+            };
+
+            let resp_bytes = serde_json::to_vec(&resp_json).unwrap();
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                resp_bytes.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&resp_bytes);
+            let _ = stream.flush();
+        }
+    });
+
+    let state_dir = fresh_state_dir("v031-c99-bridge");
+    let mut daemon = spawn_daemon("127.0.0.1:0", &state_dir).expect("spawn faygerd");
+    let addr = daemon.local_addr();
+
+    // 1. Connect external C99 FHBP/1.0 firmware node
+    let (conn_code, connected_dev) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/connect",
+        Some(&json!({"endpoint": format!("http://{bridge_addr}")})),
+    );
+    assert_eq!(conn_code, 200);
+    assert_eq!(connected_dev["device_id"], "c99_turret_mcu_01");
+    assert_eq!(connected_dev["safe_state_name"], "MCU_PWM_LOCKED");
+
+    // 2. Create iFay, switch Faying ON, embody external C99 node
+    let (_, ifay) = http_json(
+        addr,
+        "POST",
+        "/api/v1/fays/create",
+        Some(&json!({"kind": "ifay", "name": "C99BridgeController"})),
+    );
+    let fay_id = ifay["fay_id"].as_str().unwrap().to_owned();
+    let _ = http_json(
+        addr,
+        "POST",
+        &format!("/api/v1/fays/{fay_id}/faying"),
+        Some(&json!({"grade": "G2"})),
+    );
+    let (emb_code, _) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/c99_turret_mcu_01/embody",
+        Some(&json!({"fay_id": fay_id})),
+    );
+    assert_eq!(emb_code, 200);
+
+    // 3. Out-of-envelope yaw (140 deg > 90 deg) blocked locally by FayGer BEFORE hitting C99 firmware!
+    let (over_code, over_err) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/c99_turret_mcu_01/actuate",
+        Some(&json!({"action": "set_yaw", "params": {"yaw_deg": 140}})),
+    );
+    assert_eq!(over_code, 400);
+    assert_eq!(over_err["code"], "PHYSICAL_ENVELOPE_EXCEEDED");
+
+    // 4. Within-envelope yaw (42 deg) forwards `POST /fhbp/v1/actuate` and syncs firmware telemetry
+    let (act_code, act_res) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/devices/c99_turret_mcu_01/actuate",
+        Some(&json!({"action": "set_yaw", "params": {"yaw_deg": 42.0}})),
+    );
+    assert_eq!(act_code, 200);
+    assert_eq!(act_res["device"]["current_state"], "ACTUATING");
+    assert_eq!(act_res["device"]["telemetry"]["yaw_deg"], 42.0);
+    assert_eq!(act_res["device"]["telemetry"]["mcu_temp_c"], 37.2);
+
+    // 5. Global G0 Emergency Brake (`POST /api/v1/hardware/g0_all`) notifies C99 firmware `/fhbp/v1/g0_halt`
+    let (g0_all_code, g0_all_res) = http_json(
+        addr,
+        "POST",
+        "/api/v1/hardware/g0_all",
+        Some(&json!({"freeze_all_fays": true, "reason": "Global G0 test"})),
+    );
+    assert_eq!(g0_all_code, 200);
+    assert!(g0_all_res["remote_bridges_notified"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v == "c99_turret_mcu_01"));
+
+    let paths = seen_paths.lock().unwrap().clone();
+    assert_eq!(
+        paths,
+        vec![
+            "GET /fhbp/v1/manifest".to_owned(),
+            "POST /fhbp/v1/actuate".to_owned(),
+            "POST /fhbp/v1/g0_halt".to_owned(),
+        ]
+    );
+
+    let (_, aud) = http_json(addr, "GET", "/api/v1/audit", None);
+    assert_eq!(aud["verified"], true);
+
+    daemon.shutdown();
+    stop_bridge.store(true, Ordering::SeqCst);
+    let _ = TcpStream::connect(bridge_addr);
+    let _ = bridge_thread.join();
     let _ = fs::remove_dir_all(&state_dir);
 }

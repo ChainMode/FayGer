@@ -10,7 +10,7 @@
 //! 3. **严格合规判定（OQ-3）**：仅当全部必选一致性性质 100% 通过时给出 [`ConformanceVerdict::Conformant`]；
 //!    任一性质失败即判定 [`ConformanceVerdict::NonConformant`]，不使用含糊的「部分兼容」措辞。
 
-#![doc(html_root_url = "https://docs.rs/fayger-conformance/0.3.0")]
+#![doc(html_root_url = "https://docs.rs/fayger-conformance/0.3.1")]
 
 use fayger_buf::manifest::types::{
     Digest, ProfileConstraints, ResourceQuota, RuntimeRequirement, SectionKind, SectionVisibility,

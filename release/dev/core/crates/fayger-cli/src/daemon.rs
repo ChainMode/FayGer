@@ -6,7 +6,9 @@
 use crate::dashboard_html::dashboard_index_html;
 use crate::engine::{FayGerEngine, RequestedHostAction};
 use crate::error::CliError;
+use crate::hardware_hub::PHYSICAL_ENVELOPE_EXCEEDED_CODE;
 use crate::merit::{parse_positive_mu_to_raw, MeritAddInput, MeritConsumeInput};
+use crate::mobile_html::{mobile_guardian_html, mobile_webmanifest_json};
 use crate::os_control::open_browser_nonblocking;
 use crate::soul::SoulKind;
 use crate::wallet::{
@@ -229,7 +231,15 @@ impl HttpResponse {
     }
 
     fn json_err(status_code: u16, message: &str) -> Self {
-        let bytes = serde_json::to_vec(&json!({ "error": message }))
+        let payload = if message.contains(PHYSICAL_ENVELOPE_EXCEEDED_CODE) {
+            json!({
+                "code": PHYSICAL_ENVELOPE_EXCEEDED_CODE,
+                "error": message,
+            })
+        } else {
+            json!({ "error": message })
+        };
+        let bytes = serde_json::to_vec(&payload)
             .unwrap_or_else(|_| b"{\"error\":\"internal error\"}".to_vec());
         Self {
             status_code,
@@ -319,6 +329,16 @@ fn write_http_response(stream: &mut TcpStream, resp: &HttpResponse) -> std::io::
 fn route_request(req: &HttpRequest, shared_engine: &Arc<Mutex<FayGerEngine>>) -> HttpResponse {
     if req.method == "GET" && (req.path == "/" || req.path == "/index.html") {
         return HttpResponse::html(dashboard_index_html());
+    }
+    if req.method == "GET" && (req.path == "/mobile" || req.path == "/mobile/") {
+        return HttpResponse::html(mobile_guardian_html());
+    }
+    if req.method == "GET" && req.path == "/manifest.webmanifest" {
+        return HttpResponse {
+            status_code: 200,
+            content_type: "application/manifest+json; charset=utf-8",
+            body: mobile_webmanifest_json().as_bytes().to_vec(),
+        };
     }
 
     let Ok(mut engine) = shared_engine.lock() else {
@@ -477,6 +497,29 @@ fn route_request(req: &HttpRequest, shared_engine: &Arc<Mutex<FayGerEngine>>) ->
                 false,
             )
         }
+        ("GET", "/api/v1/hardware/devices") => {
+            HttpResponse::json_ok(&engine.list_hardware_devices())
+        }
+        ("POST", "/api/v1/hardware/reset") => {
+            map_cli_res(engine.reset_reference_hardware_devices(), false)
+        }
+        ("POST", "/api/v1/hardware/connect") => {
+            let body = parse_json_body(&req.body);
+            let ep = body.get("endpoint").and_then(Value::as_str).unwrap_or("");
+            map_cli_res(engine.connect_external_hardware(ep), false)
+        }
+        ("POST", "/api/v1/hardware/g0_all" | "/api/v1/hardware/g0_halt") => {
+            let body = parse_json_body(&req.body);
+            let freeze_all_fays = body
+                .get("freeze_all_fays")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let reason = body.get("reason").and_then(Value::as_str);
+            map_cli_res(
+                engine.trigger_hardware_g0_all(freeze_all_fays, reason),
+                false,
+            )
+        }
         ("GET", "/api/v1/merit/config") => HttpResponse::json_ok(&engine.merit_config()),
         ("POST" | "PUT", "/api/v1/merit/config") => {
             let body = parse_json_body(&req.body);
@@ -539,11 +582,31 @@ fn route_parameterized(req: &HttpRequest, engine: &mut FayGerEngine) -> HttpResp
             let id = percent_decode(fay_id);
             map_cli_res(engine.record_heartbeat(&id), false)
         }
-        ("POST", ["api", "v1", "fays", fay_id, "emergency-brake"]) => {
+        (
+            "POST",
+            ["api", "v1", "fays", fay_id, "emergency-brake"]
+            | ["api", "v1", "fays", fay_id, "faying", "g0"],
+        ) => {
             let id = percent_decode(fay_id);
             let body = parse_json_body(&req.body);
             let reason = body.get("reason").and_then(Value::as_str);
             map_cli_res(engine.trigger_emergency_brake(&id, reason), false)
+        }
+        ("POST", ["api", "v1", "hardware", "devices", device_id, "embody"]) => {
+            let dev_id = percent_decode(device_id);
+            let body = parse_json_body(&req.body);
+            let fay_id = body.get("fay_id").and_then(Value::as_str);
+            map_cli_res(engine.embody_hardware_device(&dev_id, fay_id), false)
+        }
+        ("POST", ["api", "v1", "hardware", "devices", device_id, "actuate"]) => {
+            let dev_id = percent_decode(device_id);
+            let body = parse_json_body(&req.body);
+            let action = body.get("action").and_then(Value::as_str).unwrap_or("");
+            let params = body.get("params").cloned().unwrap_or_else(|| json!({}));
+            map_cli_res(
+                engine.actuate_hardware_device(&dev_id, action, &params),
+                false,
+            )
         }
         ("POST", ["api", "v1", "fays", fay_id, "chat"]) => {
             let id = percent_decode(fay_id);

@@ -1,0 +1,21 @@
+{
+  "appId": "ai.ifay.fayger",
+  "appName": "FayGer Guardian",
+  "webDir": "../android/app/src/main/assets",
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": true,
+    "allowNavigation": [
+      "127.0.0.1",
+      "localhost",
+      "192.168.*.*",
+      "10.*.*.*",
+      "172.16.*.*"
+    ]
+  },
+  "ios": {
+    "contentInset": "automatic",
+    "backgroundColor": "#090d16",
+    "limitsNavigationsToAppBoundDomains": false
+  }
+}

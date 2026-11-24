@@ -2,7 +2,7 @@
 # Usage: irm https://raw.githubusercontent.com/ChainMode/FayGer/main/scripts/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$Version = if ($env:FAYGER_VERSION) { $env:FAYGER_VERSION } else { "v0.3.0" }
+$Version = if ($env:FAYGER_VERSION) { $env:FAYGER_VERSION } else { "v0.3.1" }
 $InstallDir = if ($env:FAYGER_INSTALL_DIR) { $env:FAYGER_INSTALL_DIR } else { Join-Path $HOME ".fayger\bin" }
 $Repo = if ($env:FAYGER_GITHUB_REPO) { $env:FAYGER_GITHUB_REPO } else { "ChainMode/FayGer" }
 

@@ -1,0 +1,34 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ai.ifay.fayger'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "ai.ifay.fayger"
+        minSdk 26
+        targetSdk 34
+        versionCode 301
+        versionName "0.3.1"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+        debug {
+            applicationIdSuffix ""
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Pure Android SDK classes only (Activity + WebView) — zero external Maven bloat.
+}

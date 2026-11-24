@@ -19,7 +19,7 @@
 //! assert!(text.contains("Terminated"));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/fayger-cli/0.3.0")]
+#![doc(html_root_url = "https://docs.rs/fayger-cli/0.3.1")]
 
 pub mod args;
 pub mod brain;
@@ -31,10 +31,12 @@ pub mod ego_package;
 pub mod engine;
 pub mod error;
 pub mod fs_ops;
+pub mod hardware_hub;
 pub mod host_profile;
 pub mod icp_ego;
 pub mod live_ifay;
 pub mod merit;
+pub mod mobile_html;
 pub mod os_control;
 pub mod soul;
 pub mod wallet;
@@ -65,6 +67,11 @@ pub use engine::{
     RequestedHostAction, TpCognitiveEntry, TpSharedSession,
 };
 pub use error::{exit_code_of, CliError, ExitCode};
+pub use hardware_hub::{
+    default_reference_hardware_devices, EnvelopeBound, HardwareActuateReceipt,
+    HardwareDeviceRecord, HardwareG0HaltReceipt, FHBP_PROTOCOL_VERSION,
+    PHYSICAL_ENVELOPE_EXCEEDED_CODE,
+};
 pub use host_profile::{detect_host_environment, info_text};
 pub use icp_ego::{
     render_ctx_terminal, run_ego_three_in_one, CtxAnnotation, CtxEnvelope, ICP_CTX_SCHEMA_VERSION,
