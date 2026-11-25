@@ -95,6 +95,13 @@ pub enum Command {
         /// 可选状态目录（读取已配置的宿主资源池）。
         state_dir: Option<String>,
     },
+    /// 运行 6 项本地冷启动自检并生成零个人身份信息（Zero-PII）匿名复现回执。
+    Doctor {
+        /// 是否输出机器可读 JSON。
+        json: bool,
+        /// 可选状态目录。
+        state_dir: Option<String>,
+    },
     /// 内置 `FayID` 身份与 `Auth Exchange` 凭据保险箱操作。
     Wallet {
         /// 子动作。
@@ -271,6 +278,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, CliError> {
         "run-live" => parse_run_live(&args[1..]),
         "pack" => parse_pack(&args[1..]),
         "profile" => parse_profile(&args[1..]),
+        "doctor" => parse_doctor(&args[1..]),
         "wallet" => parse_wallet(&args[1..]),
         "soul" => parse_soul(&args[1..]),
         "up" | "serve" => parse_up(&args[1..]),
@@ -561,6 +569,31 @@ fn parse_profile(rest: &[String]) -> Result<Command, CliError> {
         }
     }
     Ok(Command::Profile { json, state_dir })
+}
+
+/// 解析 `doctor [--json] [--state-dir <dir>]`。
+fn parse_doctor(rest: &[String]) -> Result<Command, CliError> {
+    let mut json = false;
+    let mut state_dir = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            "--state-dir" => {
+                state_dir = Some(next_value(rest, i, "--state-dir <dir>")?);
+                i += 2;
+            }
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unexpected doctor argument: {other}"
+                )));
+            }
+        }
+    }
+    Ok(Command::Doctor { json, state_dir })
 }
 
 /// 解析 `wallet <init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant> ...`。
@@ -943,7 +976,7 @@ fn parse_up(rest: &[String]) -> Result<Command, CliError> {
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
-            "--addr" => {
+            "--addr" | "--bind" => {
                 addr = next_value(rest, i, "--addr <host:port>")?;
                 i += 2;
             }
@@ -1019,7 +1052,8 @@ fn parse_chat(rest: &[String]) -> Result<Command, CliError> {
 #[must_use]
 pub fn usage_text(topic: Option<&str>) -> String {
     match topic {
-        Some("up" | "serve") => "fayger up [--addr 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>] [--open]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（支持 --open 自动打开浏览器）。".to_owned(),
+        Some("up" | "serve") => "fayger up [--addr|--bind 127.0.0.1:7979] [--state-dir <dir>] [--gmchain-endpoint <http://127.0.0.1:8546>] [--open]\n    启动 faygerd 三位一体后台引擎与内嵌本地可视化控制台（支持 --open 自动打开浏览器）。".to_owned(),
+        Some("doctor") => "fayger doctor [--json] [--state-dir <dir>]\n    运行 6 项本地冷启动自检并生成零个人身份信息（Zero-PII）匿名复现回执。".to_owned(),
         Some("profile") => "fayger profile [--json] [--state-dir <dir>]\n    输出标准化设备运行时环境描述文件（fayger-device-profile/1.0）。".to_owned(),
         Some("wallet") => "fayger wallet <init|show|derive-ifay|derive-cofay|dynamic-code|exchange-grant> [--state-dir <dir>] [--json]\n    管理内置 FayID 助记词保险箱、不可关联动态码与 Auth Exchange 授权票据。".to_owned(),
         Some("soul") => "fayger soul create --kind ifay|cofay --name <name> --out <path.buf> [--state-dir <dir>] [--json]\n    一键创建并密封可运行的 iFay 数字灵魂运行包或 coFay 公共席位包（.buf）。".to_owned(),
@@ -1055,7 +1089,8 @@ fayger - Fay 多平台虚拟运行环境（三位一体运行基座：faygerd + 
     fayger <命令> [参数]
 
 命令：
-    up [--addr ...]      启动 faygerd 守护引擎与内嵌 FayGer Dashboard (http://127.0.0.1:7979)
+    up [--addr|--bind ..] 启动 faygerd 守护引擎与内嵌 FayGer Dashboard (http://127.0.0.1:7979)
+    doctor [--json]      运行 6 项本地冷启动自检并输出零 PII 匿名复现回执
     profile [--json]     输出标准化设备运行时环境描述文件 (fayger-device-profile/1.0)
     wallet <子命令>      管理内置 FayID 身份保险箱、动态码与 Auth Exchange 凭据兑换
     soul create ...      一键创建可运行的 iFay 数字灵魂包或 coFay 公共席位包 (.buf)

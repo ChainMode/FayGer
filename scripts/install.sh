@@ -89,6 +89,7 @@ fi
 echo "==> SHA-256 verified: ${ACTUAL_SHA}"
 
 mkdir -p "$INSTALL_DIR"
+rm -f "${INSTALL_DIR}/fayger"
 cp "${TMP_DIR}/${ASSET}" "${INSTALL_DIR}/fayger"
 chmod +x "${INSTALL_DIR}/fayger"
 
@@ -106,5 +107,6 @@ case ":${PATH:-}:" in
     ;;
 esac
 echo ""
-echo "Launch FayGer Engine + Web Console:"
+echo "Verify local gates (Zero-PII receipt) & launch FayGer Engine + Web Console:"
+echo "  fayger doctor"
 echo "  fayger up --open"

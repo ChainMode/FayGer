@@ -345,6 +345,12 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
       <div class="card">
         <h2>Device Runtime Environment Profile (<code>fayger-device-profile/1.0</code>)</h2>
         <p class="muted">终端切片附体（Partial Embodiment）协商所提交的标准环境描述文件：</p>
+        <div class="row" style="margin:6px 0 8px">
+          <button class="btn ok" onclick="runDoctorAndShowReceipt()">🩺 环境自检 &amp; 复制匿名复现回执 (Doctor &amp; Copy Zero-PII Receipt)</button>
+          <button class="btn secondary" id="btn-copy-doctor" style="display:none" onclick="copyDoctorMarkdown()">复制 Markdown 回执</button>
+        </div>
+        <div id="doctor-checks-box" style="display:none;margin-bottom:8px"></div>
+        <pre class="code" id="doctor-receipt-box" style="display:none;margin-bottom:10px"></pre>
         <pre class="code" id="device-profile-json">{}</pre>
       </div>
     </div>
@@ -874,6 +880,43 @@ async function saveHostPool() {
   await api('/api/v1/host/pool', 'PUT', { granted_capabilities: caps, ego_endpoint, network_online });
   toast('Host Resource Pool updated');
   await refreshAll();
+}
+
+let LAST_DOCTOR_MARKDOWN = '';
+
+async function runDoctorAndShowReceipt() {
+  const checksBox = document.getElementById('doctor-checks-box');
+  const receiptBox = document.getElementById('doctor-receipt-box');
+  const copyBtn = document.getElementById('btn-copy-doctor');
+  try {
+    const rep = await api('/api/v1/doctor', 'GET');
+    LAST_DOCTOR_MARKDOWN = rep.markdown_receipt || '';
+    checksBox.style.display = 'block';
+    checksBox.innerHTML = (rep.checks || []).map(c => {
+      const cls = c.status === 'PASS' ? 'ok' : (c.status === 'INFO' ? 'merit-pill' : 'danger');
+      return `<div style="margin:3px 0"><span class="pill ${cls}">${esc(c.status)}</span> <code>${esc(c.id)}</code> — <span class="muted">${esc(c.summary)}</span></div>`;
+    }).join('');
+    receiptBox.style.display = 'block';
+    receiptBox.textContent = LAST_DOCTOR_MARKDOWN;
+    copyBtn.style.display = 'inline-block';
+    await copyDoctorMarkdown();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+async function copyDoctorMarkdown() {
+  if (!LAST_DOCTOR_MARKDOWN) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(LAST_DOCTOR_MARKDOWN);
+      toast('已复制零 PII 匿名复现回执 (可直接粘贴至 GitHub Issue/Discussion)');
+    } else {
+      toast('自检回执已生成，请直接选中文本框复制');
+    }
+  } catch (_) {
+    toast('自检回执已生成，请从下方代码框复制');
+  }
 }
 
 function renderWallet() {

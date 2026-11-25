@@ -49,7 +49,8 @@ try {
 
     Write-Host ""
     Write-Host "FayGer $Version installed to $DestExe"
-    Write-Host "Launch FayGer Engine + Web Console:"
+    Write-Host "Verify local gates (Zero-PII receipt) & launch FayGer Engine + Web Console:"
+    Write-Host "  fayger doctor"
     Write-Host "  fayger up --open"
 }
 finally {

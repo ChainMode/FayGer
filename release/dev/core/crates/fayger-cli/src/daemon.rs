@@ -4,6 +4,7 @@
 //! 同时暴露 [`spawn_daemon`] 后台句柄供端到端集成测试在 `127.0.0.1:0` 临时端口上完整验证全部 REST 契约。
 
 use crate::dashboard_html::dashboard_index_html;
+use crate::doctor::run_doctor;
 use crate::engine::{FayGerEngine, RequestedHostAction};
 use crate::error::CliError;
 use crate::hardware_hub::PHYSICAL_ENVELOPE_EXCEEDED_CODE;
@@ -359,6 +360,7 @@ fn route_request(req: &HttpRequest, shared_engine: &Arc<Mutex<FayGerEngine>>) ->
                 "chain_head_hash": head,
             }))
         }
+        ("GET", "/api/v1/doctor") => HttpResponse::json_ok(&run_doctor(engine.state_dir(), true)),
         ("GET", "/api/v1/state") => map_cli_res(engine.snapshot(true), false),
         ("GET", "/api/v1/host/profile") => HttpResponse::json_ok(&engine.device_profile(true)),
         ("GET", "/api/v1/host/pool") => HttpResponse::json_ok(engine.host_pool()),

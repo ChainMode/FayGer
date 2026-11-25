@@ -27,6 +27,7 @@ pub mod commands;
 pub mod daemon;
 pub mod dashboard_html;
 pub mod device_profile;
+pub mod doctor;
 pub mod ego_package;
 pub mod engine;
 pub mod error;
@@ -57,6 +58,9 @@ pub use daemon::{
 pub use device_profile::{
     detect_device_runtime_profile, negotiate_embodiment_slices, profile_command,
     DeviceRuntimeProfile, EmbodimentPlan, HostResourcePoolConfig, DEVICE_PROFILE_SCHEMA_VERSION,
+};
+pub use doctor::{
+    run_doctor, CompanionEndpointStatus, DoctorCheckItem, DoctorReport, DOCTOR_SCHEMA_VERSION,
 };
 pub use ego_package::{
     jcs_canonicalize, sign_ego_manifest_value, verify_and_mount_ego_package, EgoIntegrity,
@@ -281,6 +285,22 @@ fn dispatch(command: &Command, out: &mut dyn Write) -> Result<(), CliError> {
             } else {
                 write_out(out, &text)
             }
+        }
+        Command::Doctor { json, state_dir } => {
+            let dir = resolve_state_dir(state_dir.as_deref());
+            let report = run_doctor(&dir, false);
+            if *json {
+                write_json_pretty(out, &report)?;
+            } else {
+                write_out(out, &report.render_human())?;
+            }
+            if !report.all_core_passed {
+                return Err(CliError::Io {
+                    path: "$FAYGER_HOME/state".to_owned(),
+                    detail: "one or more fayger doctor core gates failed".to_owned(),
+                });
+            }
+            Ok(())
         }
         Command::Wallet { subcommand } => dispatch_wallet(subcommand, out),
         Command::SoulCreate {

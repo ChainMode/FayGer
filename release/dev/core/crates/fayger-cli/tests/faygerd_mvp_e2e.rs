@@ -128,6 +128,7 @@ fn faygerd_full_mvp_closed_loop_over_ephemeral_tcp() {
     assert!(html.contains("6. 美誉值与优先权 (MeriToken)"));
     assert!(html.contains("7. 硬件终端附身舱 (Hardware)"));
     assert!(html.contains("📱 手机监护端 (/mobile)"));
+    assert!(html.contains("Doctor &amp; Copy Zero-PII Receipt"));
     assert!(html.contains("OS 原生权限探针与一键申请面板"));
     assert!(html.contains("配置大脑：Ego 与外部大模型"));
     assert!(html.contains("终端硬件 / 操作系统 / 桌面软件操控台"));
@@ -1946,5 +1947,72 @@ fn faygerd_v0_3_1_external_c99_fhbp_hardware_bridge_connect_actuate_and_g0_halt_
     stop_bridge.store(true, Ordering::SeqCst);
     let _ = TcpStream::connect(bridge_addr);
     let _ = bridge_thread.join();
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
+fn fayger_doctor_cli_and_http_api_produce_zero_pii_reproduction_receipt() {
+    let state_dir = fresh_state_dir("doctor-e2e");
+    let state_str = state_dir.to_str().unwrap();
+
+    // 1. CLI human output (`fayger doctor --state-dir <dir>`)
+    let human_out = run_cli_capture(&["doctor", "--state-dir", state_str]);
+    assert!(human_out.contains("### FayGer Cold-Start Verification Receipt (Zero-PII)"));
+    assert!(human_out.contains("Core Gates: 5/5 PASS"));
+    assert!(human_out.contains("Receipt Digest: sha256:"));
+
+    // 2. CLI JSON output (`fayger doctor --json --state-dir <dir>`)
+    let json_out = run_cli_capture(&["doctor", "--json", "--state-dir", state_str]);
+    let cli_doc: Value = serde_json::from_str(&json_out).expect("parse doctor json");
+    assert_eq!(cli_doc["all_core_passed"], true);
+    assert_eq!(cli_doc["checks"].as_array().unwrap().len(), 6);
+
+    // 3. HTTP endpoint (`GET /api/v1/doctor`) while faygerd is running
+    let mut daemon = spawn_daemon("127.0.0.1:0", &state_dir).expect("spawn faygerd");
+    let addr = daemon.local_addr();
+    let (doc_code, api_doc) = http_json(addr, "GET", "/api/v1/doctor", None);
+    assert_eq!(doc_code, 200);
+    assert_eq!(api_doc["all_core_passed"], true);
+    assert_eq!(api_doc["companions"]["faygerd"], "online");
+    let md = api_doc["markdown_receipt"].as_str().unwrap();
+    assert!(md.contains("### FayGer Cold-Start Verification Receipt (Zero-PII)"));
+    assert!(md.contains(
+        "state_rw=PASS, faying_switch=PASS, cap_deny_gate=PASS, audit_sha256=PASS, binary=PASS"
+    ));
+
+    // Strictly verify zero $HOME or USER PII leakage in both CLI and HTTP responses
+    if let Ok(home) = std::env::var("HOME") {
+        let trimmed = home.trim();
+        if trimmed.len() >= 3 {
+            assert!(!human_out.contains(trimmed));
+            assert!(!md.contains(trimmed));
+            assert!(!serde_json::to_string(&api_doc).unwrap().contains(trimmed));
+        }
+    }
+    if let Ok(user) = std::env::var("USER") {
+        let trimmed = user.trim();
+        if trimmed.len() >= 3 {
+            assert!(!human_out.contains(trimmed));
+            assert!(!md.contains(trimmed));
+        }
+    }
+
+    // Also verify `--bind` alias on `fayger up`
+    assert_eq!(
+        parse_args(&[
+            "up".to_owned(),
+            "--bind".to_owned(),
+            "127.0.0.1:7990".to_owned()
+        ])
+        .unwrap(),
+        Command::Up {
+            addr: "127.0.0.1:7990".to_owned(),
+            state_dir: None,
+            gmchain_endpoint: None,
+            open_browser: false,
+        }
+    );
+
+    daemon.shutdown();
     let _ = fs::remove_dir_all(&state_dir);
 }
